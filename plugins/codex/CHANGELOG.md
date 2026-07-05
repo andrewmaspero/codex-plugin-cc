@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.3.0 (fork)
+
+- Parallel jobs in one workspace are now fully steerable: when the shared
+  broker is busy streaming another job, a new background job gets its own
+  dedicated broker instead of an unreachable in-process app-server. The
+  job records its runtime endpoint; steer, goal, and cancel target it
+  directly, and the dedicated broker is shut down when the job finishes,
+  is cancelled, or the session ends.
+- state.json updates are serialized with a lock file (stale-lock recovery,
+  bounded wait) and all state/job writes are atomic (temp file + rename),
+  eliminating lost updates between concurrent workers and control commands.
+
 ## 1.2.0 (fork)
 
 - Native thread goals: `/codex:goal set|show|clear` over app-server

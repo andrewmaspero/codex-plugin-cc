@@ -89,6 +89,66 @@ function removeFileIfExists(filePath) {
   }
 }
 
+function writeFileAtomic(filePath, contents) {
+  const tempPath = `${filePath}.${process.pid}.${Math.random().toString(36).slice(2, 8)}.tmp`;
+  fs.writeFileSync(tempPath, contents, "utf8");
+  fs.renameSync(tempPath, filePath);
+}
+
+const LOCK_TIMEOUT_MS = 2000;
+const LOCK_STALE_MS = 5000;
+const LOCK_RETRY_MS = 25;
+
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/**
+ * Serialize read-modify-write cycles on state.json across concurrent
+ * companion processes (background workers, steer/goal/status commands).
+ * Lock acquisition is best-effort: a stale lock (holder crashed) is stolen,
+ * and after the timeout we proceed unlocked rather than fail the command —
+ * an interleaved update is preferable to a dead control plane.
+ */
+function withStateLock(cwd, fn) {
+  ensureStateDir(cwd);
+  const lockFile = path.join(resolveStateDir(cwd), "state.lock");
+  const deadline = Date.now() + LOCK_TIMEOUT_MS;
+  let locked = false;
+
+  while (!locked && Date.now() < deadline) {
+    try {
+      const fd = fs.openSync(lockFile, "wx");
+      fs.writeSync(fd, `${process.pid}\n`);
+      fs.closeSync(fd);
+      locked = true;
+    } catch {
+      try {
+        const stat = fs.statSync(lockFile);
+        if (Date.now() - stat.mtimeMs > LOCK_STALE_MS) {
+          fs.unlinkSync(lockFile);
+          continue;
+        }
+      } catch {
+        continue;
+      }
+      sleepSync(LOCK_RETRY_MS);
+    }
+  }
+
+  try {
+    return fn();
+  } finally {
+    if (locked) {
+      try {
+        fs.unlinkSync(lockFile);
+      } catch {
+        // The lock may have been stolen as stale; nothing to release.
+      }
+    }
+  }
+}
+
 export function saveState(cwd, state) {
   const previousJobs = loadState(cwd).jobs;
   ensureStateDir(cwd);
@@ -111,14 +171,16 @@ export function saveState(cwd, state) {
     removeFileIfExists(job.logFile);
   }
 
-  fs.writeFileSync(resolveStateFile(cwd), `${JSON.stringify(nextState, null, 2)}\n`, "utf8");
+  writeFileAtomic(resolveStateFile(cwd), `${JSON.stringify(nextState, null, 2)}\n`);
   return nextState;
 }
 
 export function updateState(cwd, mutate) {
-  const state = loadState(cwd);
-  mutate(state);
-  return saveState(cwd, state);
+  return withStateLock(cwd, () => {
+    const state = loadState(cwd);
+    mutate(state);
+    return saveState(cwd, state);
+  });
 }
 
 export function generateJobId(prefix = "job") {
@@ -166,7 +228,7 @@ export function getConfig(cwd) {
 export function writeJobFile(cwd, jobId, payload) {
   ensureStateDir(cwd);
   const jobFile = resolveJobFile(cwd, jobId);
-  fs.writeFileSync(jobFile, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+  writeFileAtomic(jobFile, `${JSON.stringify(payload, null, 2)}\n`);
   return jobFile;
 }
 

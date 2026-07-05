@@ -144,8 +144,14 @@ export function resolveSteerableJob(cwd, reference) {
 export async function steerJob(cwd, reference, message) {
   const text = validateSteerMessage(message);
   const { workspaceRoot, job, threadId, turnId } = resolveSteerableJob(cwd, reference);
-  // Worktree jobs run (and register their broker) under their own cwd.
-  const result = await steerAppServerTurn(job.runCwd ?? cwd, { threadId, turnId, text });
+  // Worktree jobs run (and register their broker) under their own cwd; jobs
+  // on a dedicated broker record its endpoint for direct targeting.
+  const result = await steerAppServerTurn(job.runCwd ?? cwd, {
+    threadId,
+    turnId,
+    text,
+    brokerEndpoint: job.brokerEndpoint ?? null
+  });
 
   if (result.steered) {
     appendLogLine(job.logFile, `Steered: ${shorten(text, 120)}`);
@@ -231,10 +237,10 @@ export function resolveGoalTarget(cwd, reference) {
     if (!job.threadId) {
       throw new Error(`Job ${job.id} has not reported a Codex thread yet. Wait for /codex:status ${job.id} to show one.`);
     }
-    return { threadId: job.threadId, connectCwd: job.runCwd ?? cwd, jobId: job.id };
+    return { threadId: job.threadId, connectCwd: job.runCwd ?? cwd, jobId: job.id, brokerEndpoint: job.brokerEndpoint ?? null };
   }
 
-  return { threadId: reference, connectCwd: cwd, jobId: null };
+  return { threadId: reference, connectCwd: cwd, jobId: null, brokerEndpoint: null };
 }
 
 function compactGoal(goal) {
@@ -254,12 +260,17 @@ function compactGoal(goal) {
 export async function setGoal(cwd, reference, objective, options = {}) {
   const normalized = validateGoalObjective(objective);
   const target = resolveGoalTarget(cwd, reference);
-  const response = await requestThreadGoal(target.connectCwd, "thread/goal/set", {
-    threadId: target.threadId,
-    objective: normalized,
-    status: options.status ?? "active",
-    tokenBudget: options.tokenBudget ?? null
-  });
+  const response = await requestThreadGoal(
+    target.connectCwd,
+    "thread/goal/set",
+    {
+      threadId: target.threadId,
+      objective: normalized,
+      status: options.status ?? "active",
+      tokenBudget: options.tokenBudget ?? null
+    },
+    { brokerEndpoint: target.brokerEndpoint }
+  );
   return {
     action: "set",
     ...target,
@@ -271,7 +282,7 @@ export async function setGoal(cwd, reference, objective, options = {}) {
 
 export async function showGoal(cwd, reference) {
   const target = resolveGoalTarget(cwd, reference);
-  const response = await requestThreadGoal(target.connectCwd, "thread/goal/get", { threadId: target.threadId });
+  const response = await requestThreadGoal(target.connectCwd, "thread/goal/get", { threadId: target.threadId }, { brokerEndpoint: target.brokerEndpoint });
   return {
     action: "show",
     ...target,
@@ -283,7 +294,7 @@ export async function showGoal(cwd, reference) {
 
 export async function clearGoal(cwd, reference) {
   const target = resolveGoalTarget(cwd, reference);
-  const response = await requestThreadGoal(target.connectCwd, "thread/goal/clear", { threadId: target.threadId });
+  const response = await requestThreadGoal(target.connectCwd, "thread/goal/clear", { threadId: target.threadId }, { brokerEndpoint: target.brokerEndpoint });
   return {
     action: "clear",
     ...target,
@@ -886,7 +897,7 @@ async function collectGoalAlerts(cwd, jobs) {
     if ((job.status !== "running" && job.status !== "queued") || !job.threadId) {
       continue;
     }
-    const response = await requestThreadGoal(job.runCwd ?? cwd, "thread/goal/get", { threadId: job.threadId });
+    const response = await requestThreadGoal(job.runCwd ?? cwd, "thread/goal/get", { threadId: job.threadId }, { brokerEndpoint: job.brokerEndpoint ?? null });
     if (!response.ok) {
       checkErrors += 1;
       continue;

@@ -22,6 +22,7 @@ import {
     runAppServerTurn
   } from "./lib/codex.mjs";
 import { resolveClaudeSessionPath } from "./lib/claude-session-transfer.mjs";
+import { sendBrokerShutdown } from "./lib/broker-lifecycle.mjs";
 import { readStdinIfPiped } from "./lib/fs.mjs";
 import { collectReviewContext, createCodexWorktree, ensureGitRepository, resolveReviewTarget } from "./lib/git.mjs";
 import { binaryAvailable, terminateProcessTree } from "./lib/process.mjs";
@@ -554,6 +555,19 @@ async function executeTaskRun(request) {
   const workspaceRoot = resolveWorkspaceRoot(request.cwd);
   ensureCodexAvailable(request.cwd);
 
+  // Record which runtime the turn actually streams through, so steer/goal/
+  // cancel can reach it even when this job fell back to a dedicated broker.
+  const jobStateRoot = request.workspaceRoot ?? workspaceRoot;
+  const onRuntimeEndpoint = request.jobId
+    ? (endpoint, transport) => {
+        try {
+          upsertJob(jobStateRoot, { id: request.jobId, brokerEndpoint: endpoint, brokerTransport: transport });
+        } catch {
+          // Never let bookkeeping kill the run.
+        }
+      }
+    : null;
+
   const taskMetadata = buildTaskRunMetadata({
     prompt: request.prompt,
     resumeLast: request.resumeLast,
@@ -583,6 +597,7 @@ async function executeTaskRun(request) {
     effort: request.effort,
     sandbox: request.sandbox ?? (request.write ? "workspace-write" : "read-only"),
     goal: request.goal ?? null,
+    onRuntimeEndpoint,
     onProgress: request.onProgress,
     persistThread: true,
     threadName: resumeThreadId ? null : buildPersistentTaskThreadName(request.prompt || DEFAULT_CONTINUE_PROMPT)
@@ -733,9 +748,10 @@ function setupJobWorktree(cwd, job, options) {
   };
 }
 
-function buildTaskRequest({ cwd, model, effort, prompt, write, sandbox = null, worktree = null, goal = null, resumeLast, resumeThreadId = null, jobId }) {
+function buildTaskRequest({ cwd, workspaceRoot = null, model, effort, prompt, write, sandbox = null, worktree = null, goal = null, resumeLast, resumeThreadId = null, jobId }) {
   return {
     cwd,
+    workspaceRoot,
     model,
     effort,
     prompt,
@@ -940,6 +956,7 @@ async function handleTask(argv) {
   job = worktreeSetup.job;
   const request = buildTaskRequest({
     cwd: worktreeSetup.runCwd,
+    workspaceRoot,
     model,
     effort,
     prompt,
@@ -1128,8 +1145,10 @@ async function handleCancel(argv) {
   const threadId = existing.threadId ?? job.threadId ?? null;
   const turnId = existing.turnId ?? job.turnId ?? null;
 
-  // Worktree jobs run (and register their broker) under their own cwd.
-  const interrupt = await interruptAppServerTurn(existing.runCwd ?? job.runCwd ?? cwd, { threadId, turnId });
+  // Worktree jobs run (and register their broker) under their own cwd; jobs
+  // that fell back to a dedicated broker record its endpoint.
+  const brokerEndpoint = existing.brokerEndpoint ?? job.brokerEndpoint ?? null;
+  const interrupt = await interruptAppServerTurn(existing.runCwd ?? job.runCwd ?? cwd, { threadId, turnId, brokerEndpoint });
   if (interrupt.attempted) {
     appendLogLine(
       job.logFile,
@@ -1140,6 +1159,9 @@ async function handleCancel(argv) {
   }
 
   terminateProcessTree(job.pid ?? Number.NaN);
+  if ((existing.brokerTransport ?? job.brokerTransport) === "dedicated" && brokerEndpoint) {
+    await sendBrokerShutdown(brokerEndpoint).catch(() => {});
+  }
   appendLogLine(job.logFile, "Cancelled by user.");
 
   const completedAt = nowIso();
@@ -1371,6 +1393,7 @@ async function handleContinue(argv) {
   job = worktreeSetup.job;
   const request = buildTaskRequest({
     cwd: worktreeSetup.runCwd,
+    workspaceRoot,
     model,
     effort,
     prompt,

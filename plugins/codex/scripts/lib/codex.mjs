@@ -41,8 +41,8 @@ import path from "node:path";
 
 import { readJsonFile } from "./fs.mjs";
 import { BROKER_BUSY_RPC_CODE, BROKER_ENDPOINT_ENV, CodexAppServerClient } from "./app-server.mjs";
-import { loadBrokerSession } from "./broker-lifecycle.mjs";
-import { binaryAvailable } from "./process.mjs";
+import { createDedicatedBrokerSession, loadBrokerSession, sendBrokerShutdown, teardownBrokerSession } from "./broker-lifecycle.mjs";
+import { binaryAvailable, terminateProcessTree } from "./process.mjs";
 
 const SERVICE_NAME = "claude_code_codex_plugin";
 const TASK_THREAD_PREFIX = "Codex Companion Task";
@@ -641,6 +641,73 @@ export async function withAppServer(cwd, fn) {
   }
 }
 
+/**
+ * Like withAppServer, but keeps the turn steerable when the shared broker is
+ * busy: instead of degrading to an in-process direct app-server (which no
+ * external control connection can reach), spawn a dedicated broker for this
+ * job and report its endpoint through onEndpoint so steer/goal/cancel can
+ * target it. The dedicated broker is torn down when the run finishes.
+ */
+/**
+ * @param {string} cwd
+ * @param {(client: InstanceType<typeof CodexAppServerClient> | any) => Promise<any>} fn
+ * @param {{ onEndpoint?: ((endpoint: string | null, transport: "shared" | "dedicated" | "direct" | "closed") => void) | null }} [options]
+ */
+async function withSteerableAppServer(cwd, fn, options = {}) {
+  const onEndpoint = options.onEndpoint ?? null;
+  let client = null;
+  try {
+    client = await CodexAppServerClient.connect(cwd);
+    if (client.transport === "broker") {
+      onEndpoint?.(process.env[BROKER_ENDPOINT_ENV] ?? loadBrokerSession(cwd)?.endpoint ?? null, "shared");
+    } else {
+      onEndpoint?.(null, "direct");
+    }
+    const result = await fn(client);
+    await client.close();
+    return result;
+  } catch (error) {
+    const brokerRequested = client?.transport === "broker" || Boolean(process.env[BROKER_ENDPOINT_ENV]);
+    const shouldRetry =
+      (client?.transport === "broker" && error?.rpcCode === BROKER_BUSY_RPC_CODE) ||
+      (brokerRequested && (error?.code === "ENOENT" || error?.code === "ECONNREFUSED"));
+
+    if (client) {
+      await client.close().catch(() => {});
+      client = null;
+    }
+
+    if (!shouldRetry) {
+      throw error;
+    }
+
+    const session = await createDedicatedBrokerSession(cwd, { killProcess: terminateProcessTree });
+    if (!session) {
+      onEndpoint?.(null, "direct");
+      const directClient = await CodexAppServerClient.connect(cwd, { disableBroker: true });
+      try {
+        return await fn(directClient);
+      } finally {
+        await directClient.close();
+      }
+    }
+
+    onEndpoint?.(session.endpoint, "dedicated");
+    try {
+      const dedicatedClient = await CodexAppServerClient.connect(cwd, { brokerEndpoint: session.endpoint });
+      try {
+        return await fn(dedicatedClient);
+      } finally {
+        await dedicatedClient.close();
+      }
+    } finally {
+      await sendBrokerShutdown(session.endpoint).catch(() => {});
+      teardownBrokerSession({ ...session, killProcess: terminateProcessTree });
+      onEndpoint?.(null, "closed");
+    }
+  }
+}
+
 async function withDirectAppServer(cwd, fn) {
   const client = await CodexAppServerClient.connect(cwd, { disableBroker: true });
   try {
@@ -957,7 +1024,7 @@ export async function getCodexAuthStatus(cwd, options = {}) {
   }
 }
 
-export async function interruptAppServerTurn(cwd, { threadId, turnId }) {
+export async function interruptAppServerTurn(cwd, { threadId, turnId, brokerEndpoint = null }) {
   if (!threadId || !turnId) {
     return {
       attempted: false,
@@ -979,7 +1046,10 @@ export async function interruptAppServerTurn(cwd, { threadId, turnId }) {
 
   let client = null;
   try {
-    client = await CodexAppServerClient.connect(cwd, { reuseExistingBroker: true });
+    client = await CodexAppServerClient.connect(cwd, {
+      reuseExistingBroker: true,
+      ...(brokerEndpoint ? { brokerEndpoint } : {})
+    });
     await client.request("turn/interrupt", { threadId, turnId });
     return {
       attempted: true,
@@ -999,7 +1069,7 @@ export async function interruptAppServerTurn(cwd, { threadId, turnId }) {
   }
 }
 
-export async function steerAppServerTurn(cwd, { threadId, turnId, text }) {
+export async function steerAppServerTurn(cwd, { threadId, turnId, text, brokerEndpoint = null }) {
   if (!threadId || !turnId) {
     return {
       attempted: false,
@@ -1023,7 +1093,10 @@ export async function steerAppServerTurn(cwd, { threadId, turnId, text }) {
 
   let client = null;
   try {
-    client = await CodexAppServerClient.connect(cwd, { reuseExistingBroker: true });
+    client = await CodexAppServerClient.connect(cwd, {
+      reuseExistingBroker: true,
+      ...(brokerEndpoint ? { brokerEndpoint } : {})
+    });
     // The broker lets turn/steer through during an active stream, but a
     // transient in-flight request on the stream socket can still surface
     // busy; retry briefly before giving up.
@@ -1069,10 +1142,13 @@ export async function steerAppServerTurn(cwd, { threadId, turnId, text }) {
  * Goal methods pass the broker's control bypass, so they work while a
  * background turn is streaming.
  */
-export async function requestThreadGoal(cwd, method, params) {
+export async function requestThreadGoal(cwd, method, params, { brokerEndpoint = null } = {}) {
   let client = null;
   try {
-    client = await CodexAppServerClient.connect(cwd, { reuseExistingBroker: true });
+    client = await CodexAppServerClient.connect(cwd, {
+      reuseExistingBroker: true,
+      ...(brokerEndpoint ? { brokerEndpoint } : {})
+    });
     const result = await client.request(method, params);
     return { ok: true, transport: client.transport, result };
   } catch (error) {
@@ -1185,7 +1261,7 @@ export async function runAppServerTurn(cwd, options = {}) {
     throw new Error("Codex CLI is not installed or is missing required runtime support. Install it with `npm install -g @openai/codex`, then rerun `/codex:setup`.");
   }
 
-  return withAppServer(cwd, async (client) => {
+  return withSteerableAppServer(cwd, async (client) => {
     let threadId;
 
     if (options.resumeThreadId) {
@@ -1253,7 +1329,7 @@ export async function runAppServerTurn(cwd, options = {}) {
       touchedFiles: collectTouchedFiles(turnState.fileChanges),
       commandExecutions: turnState.commandExecutions
     };
-  });
+  }, { onEndpoint: options.onRuntimeEndpoint });
 }
 
 export async function findLatestTaskThread(cwd) {

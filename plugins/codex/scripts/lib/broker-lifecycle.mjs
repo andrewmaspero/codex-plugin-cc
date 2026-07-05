@@ -170,6 +170,50 @@ export async function ensureBrokerSession(cwd, options = {}) {
   return session;
 }
 
+/**
+ * Spawn a broker that is NOT registered as the workspace's shared session:
+ * used to give one background job its own steerable runtime when the shared
+ * broker is busy streaming another job. The caller owns teardown.
+ */
+export async function createDedicatedBrokerSession(cwd, options = {}) {
+  const sessionDir = createBrokerSessionDir("cxc-job-");
+  const endpointFactory = options.createBrokerEndpoint ?? createBrokerEndpoint;
+  const endpoint = endpointFactory(sessionDir, options.platform);
+  const pidFile = path.join(sessionDir, "broker.pid");
+  const logFile = path.join(sessionDir, "broker.log");
+  const scriptPath = options.scriptPath ?? fileURLToPath(new URL("../app-server-broker.mjs", import.meta.url));
+
+  const child = spawnBrokerProcess({
+    scriptPath,
+    cwd,
+    endpoint,
+    pidFile,
+    logFile,
+    env: options.env ?? process.env
+  });
+
+  const ready = await waitForBrokerEndpoint(endpoint, options.timeoutMs ?? 2000);
+  if (!ready) {
+    teardownBrokerSession({
+      endpoint,
+      pidFile,
+      logFile,
+      sessionDir,
+      pid: child.pid ?? null,
+      killProcess: options.killProcess ?? null
+    });
+    return null;
+  }
+
+  return {
+    endpoint,
+    pidFile,
+    logFile,
+    sessionDir,
+    pid: child.pid ?? null
+  };
+}
+
 export function teardownBrokerSession({ endpoint = null, pidFile, logFile, sessionDir = null, pid = null, killProcess = null }) {
   if (Number.isFinite(pid) && killProcess) {
     try {
