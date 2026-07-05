@@ -1,6 +1,6 @@
 ---
-description: Check active Codex jobs for drift - stalls, repeated command failures, errors, long runtimes - as compact alerts
-argument-hint: '[job-id] [--stall-seconds <n>]'
+description: Check Codex jobs for drift - stalls, repeated command failures, errors, long runtimes, orphaned workers, goal drift - as compact alerts
+argument-hint: '[job-id] [--stall-seconds <n>] [--no-goals]'
 allowed-tools: Bash(node:*)
 ---
 

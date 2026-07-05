@@ -13,7 +13,7 @@ import {
   sendBrokerShutdown,
   teardownBrokerSession
 } from "./lib/broker-lifecycle.mjs";
-import { loadState, resolveStateFile, saveState } from "./lib/state.mjs";
+import { loadState, resolveStateFile, updateState } from "./lib/state.mjs";
 import { TRANSCRIPT_PATH_ENV } from "./lib/claude-session-transfer.mjs";
 import { resolveWorkspaceRoot } from "./lib/workspace.mjs";
 
@@ -69,11 +69,20 @@ async function cleanupSessionJobs(cwd, sessionId) {
     if (job.brokerTransport === "dedicated" && job.brokerEndpoint) {
       await sendBrokerShutdown(job.brokerEndpoint).catch(() => {});
     }
+    if (job.worktree && job.runCwd) {
+      const worktreeBroker = loadBrokerSession(job.runCwd);
+      if (worktreeBroker) {
+        await sendBrokerShutdown(worktreeBroker.endpoint).catch(() => {});
+        teardownBrokerSession({ ...worktreeBroker, killProcess: terminateProcessTree });
+        clearBrokerSession(job.runCwd);
+      }
+    }
   }
 
-  saveState(workspaceRoot, {
-    ...state,
-    jobs: state.jobs.filter((job) => job.sessionId !== sessionId)
+  // updateState is lock-serialized, so a concurrent worker upsert from
+  // another live session cannot be lost by this rewrite.
+  updateState(workspaceRoot, (nextState) => {
+    nextState.jobs = nextState.jobs.filter((job) => job.sessionId !== sessionId);
   });
 }
 

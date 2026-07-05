@@ -113,13 +113,14 @@ function sleepSync(ms) {
 function withStateLock(cwd, fn) {
   ensureStateDir(cwd);
   const lockFile = path.join(resolveStateDir(cwd), "state.lock");
+  const lockToken = `${process.pid}-${Math.random().toString(36).slice(2, 10)}`;
   const deadline = Date.now() + LOCK_TIMEOUT_MS;
   let locked = false;
 
   while (!locked && Date.now() < deadline) {
     try {
       const fd = fs.openSync(lockFile, "wx");
-      fs.writeSync(fd, `${process.pid}\n`);
+      fs.writeSync(fd, `${lockToken}\n`);
       fs.closeSync(fd);
       locked = true;
     } catch {
@@ -140,10 +141,14 @@ function withStateLock(cwd, fn) {
     return fn();
   } finally {
     if (locked) {
+      // Only release a lock we still own: it may have been stolen as stale
+      // (and re-acquired by another writer) if fn() ran unusually long.
       try {
-        fs.unlinkSync(lockFile);
+        if (fs.readFileSync(lockFile, "utf8").trim() === lockToken) {
+          fs.unlinkSync(lockFile);
+        }
       } catch {
-        // The lock may have been stolen as stale; nothing to release.
+        // Already stolen or removed; nothing to release.
       }
     }
   }

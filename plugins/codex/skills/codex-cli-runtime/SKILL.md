@@ -21,7 +21,8 @@ Execution rules:
 - Leave `--effort` unset unless the user explicitly requests a specific effort.
 - Leave model unset by default. Add `--model` only when the user explicitly asks for one.
 - Map `spark` to `--model gpt-5.3-codex-spark`.
-- Default to a write-capable Codex run by adding `--write` unless the user explicitly asks for read-only behavior or only wants review, diagnosis, or research without edits.
+- Sandbox: forward `--write`, `--full`, `--sandbox <mode>`, `--worktree`, and `--worktree-name <name>` when present; strip them from the task text. If the user passed no sandbox control, add NOTHING — the workspace's configured default sandbox (set with `/codex:setup --sandbox`) applies, and adding `--write` would silently downgrade a workspace configured for full access. Only add `--write` when the task clearly requires edits AND the workspace has no configured default (setup report shows `default sandbox: read-only`).
+- Forward `--goal <objective>` and `--goal-budget <tokens>` when present; strip them from the task text.
 
 Command selection:
 - Use exactly one `task` invocation per rescue handoff.
@@ -36,7 +37,7 @@ Command selection:
 - `task --resume-last`: internal helper for "keep going", "resume", "apply the top fix", or "dig deeper" after a previous rescue run.
 
 Safety rules:
-- Default to write-capable Codex work in `codex:codex-rescue` unless the user explicitly asks for read-only behavior.
+- Respect the workspace's configured sandbox default; never inject a sandbox flag the user did not ask for (see the sandbox rule above).
 - Preserve the user's task text as-is apart from stripping routing flags.
 - Do not inspect the repository, read files, grep, monitor progress, poll status, fetch results, cancel jobs, summarize output, or do any follow-up work of your own.
 - Return the stdout of the `task` command exactly as-is.

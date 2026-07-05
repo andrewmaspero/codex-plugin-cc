@@ -946,16 +946,18 @@ export async function buildAlertsSnapshot(cwd, reference = "", options = {}) {
 }
 
 export function renderAlerts(payload) {
+  const lines = [];
   if (payload.alerts.length === 0) {
     const checked = payload.checkedJobs.map((job) => `${job.id} (${job.status})`).join(", ") || "none";
-    return `No alerts. Jobs checked: ${checked}.\n`;
+    lines.push(`No alerts. Jobs checked: ${checked}.`);
   }
-
-  const lines = [];
   for (const alert of payload.alerts) {
     lines.push(`ALERT ${alert.jobId} ${alert.kind}`);
     lines.push(`  Evidence: ${alert.evidence}`);
     lines.push(`  Suggested action: ${alert.suggestedAction}`);
+  }
+  if (payload.goalCheckErrors > 0) {
+    lines.push(`Note: ${payload.goalCheckErrors} goal check(s) could not reach their job runtime; goal drift may be underreported.`);
   }
   return `${lines.join("\n")}\n`;
 }

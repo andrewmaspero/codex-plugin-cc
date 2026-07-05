@@ -19,7 +19,8 @@ import {
     parseStructuredOutput,
     readOutputSchema,
     runAppServerReview,
-    runAppServerTurn
+    runAppServerTurn,
+    teardownWorkspaceBrokerSession
   } from "./lib/codex.mjs";
 import { resolveClaudeSessionPath } from "./lib/claude-session-transfer.mjs";
 import { sendBrokerShutdown } from "./lib/broker-lifecycle.mjs";
@@ -501,11 +502,21 @@ async function executeReviewRun(request) {
 
   const context = collectReviewContext(request.cwd, target);
   const prompt = buildAdversarialReviewPrompt(context, focusText);
+  const reviewStateRoot = request.workspaceRoot ?? resolveWorkspaceRoot(request.cwd);
   const result = await runAppServerTurn(context.repoRoot, {
     prompt,
     model: request.model,
     sandbox: "read-only",
     outputSchema: readOutputSchema(REVIEW_SCHEMA),
+    onRuntimeEndpoint: request.jobId
+      ? (endpoint, transport) => {
+          try {
+            upsertJob(reviewStateRoot, { id: request.jobId, brokerEndpoint: endpoint, brokerTransport: transport });
+          } catch {
+            // Never let bookkeeping kill the run.
+          }
+        }
+      : null,
     onProgress: request.onProgress
   });
   const parsed = parseStructuredOutput(result.finalMessage, {
@@ -589,19 +600,29 @@ async function executeTaskRun(request) {
     throw new Error("Provide a prompt, a prompt file, piped stdin, or use --resume-last.");
   }
 
-  const result = await runAppServerTurn(workspaceRoot, {
-    resumeThreadId,
-    prompt: request.prompt,
-    defaultPrompt: resumeThreadId ? DEFAULT_CONTINUE_PROMPT : "",
-    model: request.model,
-    effort: request.effort,
-    sandbox: request.sandbox ?? (request.write ? "workspace-write" : "read-only"),
-    goal: request.goal ?? null,
-    onRuntimeEndpoint,
-    onProgress: request.onProgress,
-    persistThread: true,
-    threadName: resumeThreadId ? null : buildPersistentTaskThreadName(request.prompt || DEFAULT_CONTINUE_PROMPT)
-  });
+  let result;
+  try {
+    result = await runAppServerTurn(workspaceRoot, {
+      resumeThreadId,
+      prompt: request.prompt,
+      defaultPrompt: resumeThreadId ? DEFAULT_CONTINUE_PROMPT : "",
+      model: request.model,
+      effort: request.effort,
+      sandbox: request.sandbox ?? (request.write ? "workspace-write" : "read-only"),
+      goal: request.goal ?? null,
+      onRuntimeEndpoint,
+      onProgress: request.onProgress,
+      persistThread: true,
+      threadName: resumeThreadId ? null : buildPersistentTaskThreadName(request.prompt || DEFAULT_CONTINUE_PROMPT)
+    });
+  } finally {
+    if (request.worktree?.worktreePath) {
+      // The worktree job registered a broker keyed to the worktree; reap it
+      // so no broker/app-server outlives the job.
+      await teardownWorkspaceBrokerSession(workspaceRoot).catch(() => {});
+      onRuntimeEndpoint?.(null, "closed");
+    }
+  }
 
   const rawOutput = typeof result.finalMessage === "string" ? result.finalMessage : "";
   const failureMessage = result.error?.message ?? result.stderr ?? "";
@@ -905,6 +926,8 @@ async function handleReviewCommand(argv, config) {
     (progress) =>
       executeReviewRun({
         cwd,
+        workspaceRoot,
+        jobId: job.id,
         base: options.base,
         scope: options.scope,
         model: options.model,
@@ -1161,6 +1184,10 @@ async function handleCancel(argv) {
   terminateProcessTree(job.pid ?? Number.NaN);
   if ((existing.brokerTransport ?? job.brokerTransport) === "dedicated" && brokerEndpoint) {
     await sendBrokerShutdown(brokerEndpoint).catch(() => {});
+  }
+  const cancelRunCwd = existing.runCwd ?? job.runCwd ?? null;
+  if ((existing.worktree ?? job.worktree) && cancelRunCwd) {
+    await teardownWorkspaceBrokerSession(cancelRunCwd).catch(() => {});
   }
   appendLogLine(job.logFile, "Cancelled by user.");
 

@@ -1,6 +1,6 @@
 ---
 description: List compact thread items (messages, commands, file changes) with type filters and a hard output budget
-argument-hint: '<thread-id> [--turn <turn-id>] [--type <userMessage,agentMessage,commandExecution,fileChange,...>] [--limit <n>] [--budget <chars>]'
+argument-hint: '<thread-id> [--turn <turn-id>] [--type <userMessage,agentMessage,commandExecution,fileChange,...>] [--limit <n>] [--cursor <cursor>] [--budget <chars>]'
 allowed-tools: Bash(node:*)
 ---
 

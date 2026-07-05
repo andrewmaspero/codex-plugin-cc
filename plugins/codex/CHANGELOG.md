@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.3.1 (fork)
+
+Production-readiness gate fixes (second fresh-context review):
+
+- codex-cli-runtime no longer injects `--write` by default, which silently
+  downgraded workspaces configured with `setup --sandbox full`; the rescue
+  path now defers to the workspace sandbox default
+- Session-end job cleanup uses the state lock (no lost updates in
+  multi-session workspaces) and lock release is token-checked so a stolen
+  stale lock can never delete another writer's live lock
+- Worktree jobs reap their per-worktree broker at job end, cancel, and
+  session end (no leaked broker/app-server processes)
+- Adversarial reviews record their runtime endpoint, so they steer reliably
+  even when they land on a dedicated broker
+- `--goal` on a Codex CLI without thread-goal support fails with an
+  actionable message instead of a raw protocol error
+- Control connections time out instead of hanging on a wedged runtime
+  (5s broker initialize, 30s direct app-server start)
+- `/codex:alerts` surfaces unreachable goal checks instead of implying all
+  clear; `result <running-job>` says the job is still running instead of
+  "no job found"; argument-hints synced with real flags
+
 ## 1.3.0 (fork)
 
 - Parallel jobs in one workspace are now fully steerable: when the shared

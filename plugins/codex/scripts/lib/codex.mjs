@@ -41,7 +41,7 @@ import path from "node:path";
 
 import { readJsonFile } from "./fs.mjs";
 import { BROKER_BUSY_RPC_CODE, BROKER_ENDPOINT_ENV, CodexAppServerClient } from "./app-server.mjs";
-import { createDedicatedBrokerSession, loadBrokerSession, sendBrokerShutdown, teardownBrokerSession } from "./broker-lifecycle.mjs";
+import { clearBrokerSession, createDedicatedBrokerSession, loadBrokerSession, sendBrokerShutdown, teardownBrokerSession } from "./broker-lifecycle.mjs";
 import { binaryAvailable, terminateProcessTree } from "./process.mjs";
 
 const SERVICE_NAME = "claude_code_codex_plugin";
@@ -1255,6 +1255,22 @@ export async function importExternalAgentSession(cwd, options = {}) {
   });
 }
 
+/**
+ * Shut down and forget the shared broker session registered for `cwd`.
+ * Worktree jobs register a broker keyed to the worktree; without this the
+ * broker (and its codex app-server) outlives the job and the worktree.
+ */
+export async function teardownWorkspaceBrokerSession(cwd) {
+  const session = loadBrokerSession(cwd);
+  if (!session) {
+    return false;
+  }
+  await sendBrokerShutdown(session.endpoint).catch(() => {});
+  teardownBrokerSession({ ...session, killProcess: terminateProcessTree });
+  clearBrokerSession(cwd);
+  return true;
+}
+
 export async function runAppServerTurn(cwd, options = {}) {
   const availability = getCodexAvailability(cwd);
   if (!availability.available) {
@@ -1288,12 +1304,23 @@ export async function runAppServerTurn(cwd, options = {}) {
     });
 
     if (options.goal?.objective) {
-      await client.request("thread/goal/set", {
-        threadId,
-        objective: options.goal.objective,
-        status: "active",
-        tokenBudget: options.goal.tokenBudget ?? null
-      });
+      try {
+        await client.request("thread/goal/set", {
+          threadId,
+          objective: options.goal.objective,
+          status: "active",
+          tokenBudget: options.goal.tokenBudget ?? null
+        });
+      } catch (error) {
+        const message = String(error?.message ?? error ?? "");
+        if (error?.rpcCode === -32601 || message.includes("unknown variant") || message.includes("unknown method")) {
+          throw new Error(
+            "This Codex CLI does not support thread goals. Rerun without --goal, or upgrade with `npm install -g @openai/codex@latest`.",
+            { cause: error }
+          );
+        }
+        throw error;
+      }
       emitProgress(options.onProgress, `Goal set: ${shorten(options.goal.objective, 96)}`, "starting");
     }
 

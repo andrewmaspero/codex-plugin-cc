@@ -1,6 +1,6 @@
 ---
 description: Set, show, or clear a persistent goal on a Codex job or thread to keep long-running loops anchored
-argument-hint: '<set|show|clear> [job-id|thread-id] [--budget <tokens>] [-- <objective>]'
+argument-hint: '<set|show|clear> [job-id|thread-id] [--budget <tokens>] [--status <active|paused|blocked|complete>] [-- <objective>]'
 allowed-tools: Bash(node:*)
 ---
 

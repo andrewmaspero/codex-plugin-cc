@@ -256,11 +256,26 @@ export function buildSingleJobSnapshot(cwd, reference, options = {}) {
 export function resolveResultJob(cwd, reference) {
   const workspaceRoot = resolveWorkspaceRoot(cwd);
   const jobs = sortJobsNewestFirst(reference ? listJobs(workspaceRoot) : filterJobsForCurrentSession(listJobs(workspaceRoot)));
-  const selected = matchJobReference(
-    jobs,
-    reference,
-    (job) => job.status === "completed" || job.status === "failed" || job.status === "cancelled"
-  );
+  let selected;
+  try {
+    selected = matchJobReference(
+      jobs,
+      reference,
+      (job) => job.status === "completed" || job.status === "failed" || job.status === "cancelled"
+    );
+  } catch (error) {
+    // A referenced job may exist but still be active; report that instead of
+    // "no job found".
+    const activeMatch = reference
+      ? jobs.find(
+          (job) => (job.id === reference || job.id.startsWith(reference)) && (job.status === "queued" || job.status === "running")
+        )
+      : null;
+    if (activeMatch) {
+      throw new Error(`Job ${activeMatch.id} is still ${activeMatch.status}. Check /codex:status and try again once it finishes.`);
+    }
+    throw error;
+  }
 
   if (selected) {
     return { workspaceRoot, job: selected };
