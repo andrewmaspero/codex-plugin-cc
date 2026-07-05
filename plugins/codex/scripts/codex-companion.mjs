@@ -1229,16 +1229,28 @@ async function handleCancel(argv) {
 async function handleSteer(argv) {
   const { options, positionals } = parseCommandInput(argv, {
     valueOptions: ["cwd"],
-    booleanOptions: ["json"]
+    booleanOptions: ["json", "message-stdin"]
   });
 
   const cwd = resolveCommandCwd(options);
   const [reference, ...messageParts] = positionals;
-  const payload = await steerJob(cwd, reference ?? "", messageParts.join(" "));
+  // `--message-stdin` reads the correction from stdin instead of argv, so a
+  // message containing backticks, quotes, or `$` never passes through shell
+  // metacharacter interpretation. In that mode positionals hold only the job id.
+  const message = options["message-stdin"] ? await readAllStdin() : messageParts.join(" ");
+  const payload = await steerJob(cwd, reference ?? "", message);
   outputCommandResult(payload, renderSteerResult(payload), options.json);
   if (!payload.steered) {
     process.exitCode = 1;
   }
+}
+
+async function readAllStdin() {
+  const chunks = [];
+  for await (const chunk of process.stdin) {
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks).toString("utf8").trim();
 }
 
 async function handleThreads(argv) {
