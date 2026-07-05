@@ -4,7 +4,28 @@ argument-hint: '<thread-id> [--background] [--write|--full|--sandbox <mode>] [--
 allowed-tools: Bash(node:*)
 ---
 
-!`node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs" continue "$ARGUMENTS"`
+The raw arguments are:
+
+$ARGUMENTS
+
+Run the continue command with a single `Bash` tool call.
+
+- If the follow-up prompt has no shell metacharacters, run it directly:
+  `node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs" continue $ARGUMENTS`
+- If the prompt contains backticks, quotes, or `$` (common — follow-ups cite
+  `code` and paths), do NOT inline it into a `!`-prefixed command. Feed the prompt
+  over stdin via a single-quoted heredoc and pass `--prompt-stdin`, with only the
+  `<thread-id>` and any flags as argv tokens:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs" continue <THREAD_ID> --background --prompt-stdin <<'CODEX_CONTINUE_EOF'
+<paste the follow-up prompt here verbatim>
+CODEX_CONTINUE_EOF
+```
+
+The single-quoted delimiter disables all shell expansion, so the prompt passes
+through byte for byte. Keep `--background`, `--full`/`--write`/`--sandbox`,
+`--worktree`, `--goal`, `--model`, `--effort` as normal flags.
 
 Present the command output exactly.
 

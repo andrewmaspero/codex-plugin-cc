@@ -4,7 +4,30 @@ argument-hint: '<set|show|clear> [job-id|thread-id] [--budget <tokens>] [--statu
 allowed-tools: Bash(node:*)
 ---
 
-!`node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs" goal "$ARGUMENTS"`
+The raw arguments are:
+
+$ARGUMENTS
+
+Run the goal command with a single `Bash` tool call.
+
+- For `goal show` / `goal clear`, or `goal set` whose objective has no shell
+  metacharacters, run it directly:
+  `node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs" goal $ARGUMENTS`
+- For `goal set` whose objective contains backticks, quotes, or `$` (common —
+  acceptance criteria often cite `commands` and paths), do NOT inline the objective
+  into a `!`-prefixed command (it expands inside a double-quoted backtick command
+  and breaks on the first backtick or unbalanced quote). Feed the objective over
+  stdin via a single-quoted heredoc and pass `--objective-stdin`, with only the
+  `set` action and optional `<job-id|thread-id>` as argv tokens:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs" goal set <REF> --objective-stdin <<'CODEX_GOAL_EOF'
+<paste the objective text here verbatim (everything after the `--`)>
+CODEX_GOAL_EOF
+```
+
+The single-quoted delimiter disables all shell expansion, so the objective passes
+through byte for byte. Add `--budget <tokens>` / `--status <status>` as normal flags.
 
 Present the command output exactly.
 

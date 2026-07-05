@@ -1237,20 +1237,12 @@ async function handleSteer(argv) {
   // `--message-stdin` reads the correction from stdin instead of argv, so a
   // message containing backticks, quotes, or `$` never passes through shell
   // metacharacter interpretation. In that mode positionals hold only the job id.
-  const message = options["message-stdin"] ? await readAllStdin() : messageParts.join(" ");
+  const message = options["message-stdin"] ? readStdinIfPiped().trim() : messageParts.join(" ");
   const payload = await steerJob(cwd, reference ?? "", message);
   outputCommandResult(payload, renderSteerResult(payload), options.json);
   if (!payload.steered) {
     process.exitCode = 1;
   }
-}
-
-async function readAllStdin() {
-  const chunks = [];
-  for await (const chunk of process.stdin) {
-    chunks.push(chunk);
-  }
-  return Buffer.concat(chunks).toString("utf8").trim();
 }
 
 async function handleThreads(argv) {
@@ -1361,7 +1353,7 @@ async function handleAlerts(argv) {
 async function handleGoal(argv) {
   const { options, positionals } = parseCommandInput(argv, {
     valueOptions: ["cwd", "budget", "status"],
-    booleanOptions: ["json"]
+    booleanOptions: ["json", "objective-stdin"]
   });
 
   const [action, ...rest] = positionals;
@@ -1369,7 +1361,11 @@ async function handleGoal(argv) {
 
   if (action === "set") {
     const [reference, ...objectiveParts] = rest;
-    const payload = await setGoal(cwd, reference ?? "", objectiveParts.join(" "), {
+    // `--objective-stdin` reads the objective from stdin so goal text containing
+    // backticks, quotes, or `$` never passes through shell interpretation; in
+    // that mode positionals hold only the action and the optional reference.
+    const objective = options["objective-stdin"] ? readStdinIfPiped().trim() : objectiveParts.join(" ");
+    const payload = await setGoal(cwd, reference ?? "", objective, {
       tokenBudget: options.budget != null ? Number(options.budget) : null,
       status: options.status ?? "active"
     });
@@ -1407,7 +1403,7 @@ function handleArtifacts(argv) {
 async function handleContinue(argv) {
   const { options, positionals } = parseCommandInput(argv, {
     valueOptions: ["model", "effort", "cwd", "sandbox", "worktree-name", "goal", "goal-budget"],
-    booleanOptions: ["json", "write", "full", "worktree", "background"],
+    booleanOptions: ["json", "write", "full", "worktree", "background", "prompt-stdin"],
     aliasMap: {
       m: "model"
     }
@@ -1422,7 +1418,10 @@ async function handleContinue(argv) {
   const workspaceRoot = resolveCommandWorkspace(options);
   const model = normalizeRequestedModel(options.model);
   const effort = normalizeReasoningEffort(options.effort);
-  const prompt = promptParts.join(" ").trim();
+  // `--prompt-stdin` reads the follow-up prompt from stdin so prose containing
+  // backticks, quotes, or `$` never passes through shell interpretation; in that
+  // mode positionals hold only the thread id.
+  const prompt = options["prompt-stdin"] ? readStdinIfPiped().trim() : promptParts.join(" ").trim();
   const sandbox = resolveTaskSandbox(options, workspaceRoot);
   const write = sandbox !== "read-only";
 
