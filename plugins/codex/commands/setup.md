@@ -1,6 +1,6 @@
 ---
-description: Check whether the local Codex CLI is ready and optionally toggle the stop-time review gate
-argument-hint: '[--enable-review-gate|--disable-review-gate]'
+description: Check whether the local Codex CLI is ready, toggle the stop-time review gate, and set the default sandbox trust level
+argument-hint: '[--enable-review-gate|--disable-review-gate] [--sandbox <read-only|write|full|clear>]'
 allowed-tools: Bash(node:*), Bash(npm:*), AskUserQuestion
 ---
 
@@ -30,6 +30,11 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs" setup --json $ARGUMENTS
 
 If Codex is already installed or npm is unavailable:
 - Do not ask about installation.
+
+Sandbox trust level:
+- `--sandbox full` (alias `danger-full-access`) makes every rescue/continue job in this workspace run with full permissions and no sandbox. Use it when the user says they trust Codex and do not want sandboxing.
+- `--sandbox write` defaults jobs to workspace-write; `--sandbox read-only` or `--sandbox clear` restores the conservative default.
+- Per-call flags (`--full`, `--write`, `--sandbox <mode>`) still override the workspace default.
 
 Output rules:
 - Present the final setup output to the user.

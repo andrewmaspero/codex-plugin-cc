@@ -1,6 +1,6 @@
 ---
 description: Start a follow-up Codex turn on a specific existing thread with a corrective or continuation prompt
-argument-hint: '<thread-id> [--background] [--write] [--model <model|spark>] [--effort <effort>] [prompt]'
+argument-hint: '<thread-id> [--background] [--write|--full|--sandbox <mode>] [--worktree|--worktree-name <name>] [--model <model|spark>] [--effort <effort>] [prompt]'
 disable-model-invocation: true
 allowed-tools: Bash(node:*)
 ---

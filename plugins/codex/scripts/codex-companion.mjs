@@ -23,7 +23,7 @@ import {
   } from "./lib/codex.mjs";
 import { resolveClaudeSessionPath } from "./lib/claude-session-transfer.mjs";
 import { readStdinIfPiped } from "./lib/fs.mjs";
-import { collectReviewContext, ensureGitRepository, resolveReviewTarget } from "./lib/git.mjs";
+import { collectReviewContext, createCodexWorktree, ensureGitRepository, resolveReviewTarget } from "./lib/git.mjs";
 import { binaryAvailable, terminateProcessTree } from "./lib/process.mjs";
 import { loadPromptTemplate, interpolateTemplate } from "./lib/prompts.mjs";
 import {
@@ -86,16 +86,25 @@ const DEFAULT_STATUS_WAIT_TIMEOUT_MS = 240000;
 const DEFAULT_STATUS_POLL_INTERVAL_MS = 2000;
 const VALID_REASONING_EFFORTS = new Set(["none", "minimal", "low", "medium", "high", "xhigh"]);
 const MODEL_ALIASES = new Map([["spark", "gpt-5.3-codex-spark"]]);
+const SANDBOX_ALIASES = new Map([
+  ["read-only", "read-only"],
+  ["readonly", "read-only"],
+  ["workspace-write", "workspace-write"],
+  ["write", "workspace-write"],
+  ["danger-full-access", "danger-full-access"],
+  ["full", "danger-full-access"],
+  ["danger", "danger-full-access"]
+]);
 const STOP_REVIEW_TASK_MARKER = "Run a stop-gate review of the previous Claude turn.";
 
 function printUsage() {
   console.log(
     [
       "Usage:",
-      "  node scripts/codex-companion.mjs setup [--enable-review-gate|--disable-review-gate] [--json]",
+      "  node scripts/codex-companion.mjs setup [--enable-review-gate|--disable-review-gate] [--sandbox <read-only|write|full|clear>] [--json]",
       "  node scripts/codex-companion.mjs review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>]",
       "  node scripts/codex-companion.mjs adversarial-review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [focus text]",
-      "  node scripts/codex-companion.mjs task [--background] [--write] [--resume-last|--resume|--fresh] [--model <model|spark>] [--effort <none|minimal|low|medium|high|xhigh>] [prompt]",
+      "  node scripts/codex-companion.mjs task [--background] [--write|--full|--sandbox <mode>] [--worktree|--worktree-name <name>] [--resume-last|--resume|--fresh] [--model <model|spark>] [--effort <none|minimal|low|medium|high|xhigh>] [prompt]",
       "  node scripts/codex-companion.mjs transfer [--source <claude-jsonl>] [--json]",
       "  node scripts/codex-companion.mjs status [job-id] [--all] [--json]",
       "  node scripts/codex-companion.mjs result [job-id] [--json]",
@@ -107,7 +116,7 @@ function printUsage() {
       "  node scripts/codex-companion.mjs items <thread-id> [--turn <turn-id>] [--type <t1,t2>] [--limit <n>] [--budget <chars>] [--json]",
       "  node scripts/codex-companion.mjs tail [job-id] [--lines <n>] [--json]",
       "  node scripts/codex-companion.mjs alerts [job-id] [--stall-seconds <n>] [--json]",
-      "  node scripts/codex-companion.mjs continue <thread-id> [--background] [--write] [--model <model|spark>] [--effort <none|minimal|low|medium|high|xhigh>] [prompt]"
+      "  node scripts/codex-companion.mjs continue <thread-id> [--background] [--write|--full|--sandbox <mode>] [--worktree|--worktree-name <name>] [--model <model|spark>] [--effort <none|minimal|low|medium|high|xhigh>] [prompt]"
     ].join("\n")
   );
 }
@@ -133,6 +142,43 @@ function normalizeRequestedModel(model) {
     return null;
   }
   return MODEL_ALIASES.get(normalized.toLowerCase()) ?? normalized;
+}
+
+function normalizeSandboxMode(value) {
+  if (value == null) {
+    return null;
+  }
+  const normalized = String(value).trim().toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+  const mode = SANDBOX_ALIASES.get(normalized);
+  if (!mode) {
+    throw new Error(
+      `Unsupported sandbox mode "${value}". Use one of: read-only, workspace-write (write), danger-full-access (full).`
+    );
+  }
+  return mode;
+}
+
+/**
+ * Sandbox resolution order: explicit --sandbox, then --full, then --write,
+ * then the workspace's configured defaultSandbox (set via
+ * `setup --sandbox <mode>`), then read-only.
+ */
+function resolveTaskSandbox(options, workspaceRoot) {
+  const explicit = normalizeSandboxMode(options.sandbox);
+  if (explicit) {
+    return explicit;
+  }
+  if (options.full) {
+    return "danger-full-access";
+  }
+  if (options.write) {
+    return "workspace-write";
+  }
+  const configured = normalizeSandboxMode(getConfig(workspaceRoot).defaultSandbox);
+  return configured ?? "read-only";
 }
 
 function normalizeReasoningEffort(effort) {
@@ -231,6 +277,7 @@ async function buildSetupReport(cwd, actionsTaken = []) {
     auth: authStatus,
     sessionRuntime: getSessionRuntimeStatus(process.env, workspaceRoot),
     reviewGateEnabled: Boolean(config.stopReviewGate),
+    defaultSandbox: normalizeSandboxMode(config.defaultSandbox) ?? "read-only",
     actionsTaken,
     nextSteps
   };
@@ -238,7 +285,7 @@ async function buildSetupReport(cwd, actionsTaken = []) {
 
 async function handleSetup(argv) {
   const { options } = parseCommandInput(argv, {
-    valueOptions: ["cwd"],
+    valueOptions: ["cwd", "sandbox"],
     booleanOptions: ["json", "enable-review-gate", "disable-review-gate"]
   });
 
@@ -256,6 +303,18 @@ async function handleSetup(argv) {
   } else if (options["disable-review-gate"]) {
     setConfig(workspaceRoot, "stopReviewGate", false);
     actionsTaken.push(`Disabled the stop-time review gate for ${workspaceRoot}.`);
+  }
+
+  if (options.sandbox) {
+    const requested = String(options.sandbox).trim().toLowerCase();
+    if (requested === "clear" || requested === "default") {
+      setConfig(workspaceRoot, "defaultSandbox", null);
+      actionsTaken.push(`Cleared the default sandbox for ${workspaceRoot} (tasks run read-only unless flagged).`);
+    } else {
+      const mode = normalizeSandboxMode(options.sandbox);
+      setConfig(workspaceRoot, "defaultSandbox", mode);
+      actionsTaken.push(`Set the default sandbox for ${workspaceRoot} to ${mode}. All rescue/continue jobs now run with it unless overridden per call.`);
+    }
   }
 
   const finalReport = await buildSetupReport(cwd, actionsTaken);
@@ -513,7 +572,7 @@ async function executeTaskRun(request) {
     defaultPrompt: resumeThreadId ? DEFAULT_CONTINUE_PROMPT : "",
     model: request.model,
     effort: request.effort,
-    sandbox: request.write ? "workspace-write" : "read-only",
+    sandbox: request.sandbox ?? (request.write ? "workspace-write" : "read-only"),
     onProgress: request.onProgress,
     persistThread: true,
     threadName: resumeThreadId ? null : buildPersistentTaskThreadName(request.prompt || DEFAULT_CONTINUE_PROMPT)
@@ -521,7 +580,7 @@ async function executeTaskRun(request) {
 
   const rawOutput = typeof result.finalMessage === "string" ? result.finalMessage : "";
   const failureMessage = result.error?.message ?? result.stderr ?? "";
-  const rendered = renderTaskResult(
+  let rendered = renderTaskResult(
     {
       rawOutput,
       failureMessage,
@@ -533,12 +592,17 @@ async function executeTaskRun(request) {
       write: Boolean(request.write)
     }
   );
+  if (request.worktree?.worktreePath) {
+    rendered = `${rendered.trimEnd()}\n\nWorktree: ${request.worktree.worktreePath} (branch ${request.worktree.branch}). Merge it back or clean up with \`git worktree remove ${request.worktree.worktreePath}\`.\n`;
+  }
   const payload = {
     status: result.status,
     threadId: result.threadId,
     rawOutput,
     touchedFiles: result.touchedFiles,
-    reasoningSummary: result.reasoningSummary
+    reasoningSummary: result.reasoningSummary,
+    sandbox: request.sandbox ?? (request.write ? "workspace-write" : "read-only"),
+    worktree: request.worktree ?? null
   };
 
   return {
@@ -586,7 +650,14 @@ function buildTaskRunMetadata({ prompt, resumeLast = false, resumeThreadId = nul
 }
 
 function renderQueuedTaskLaunch(payload) {
-  return `${payload.title} started in the background as ${payload.jobId}. Check /codex:status ${payload.jobId} for progress.\n`;
+  const lines = [`${payload.title} started in the background as ${payload.jobId}. Check /codex:status ${payload.jobId} for progress.`];
+  if (payload.worktree?.worktreePath) {
+    lines.push(`Worktree: ${payload.worktree.worktreePath} (branch ${payload.worktree.branch}).`);
+  }
+  if (payload.sandbox && payload.sandbox !== "read-only") {
+    lines.push(`Sandbox: ${payload.sandbox}.`);
+  }
+  return `${lines.join("\n")}\n`;
 }
 
 function getJobKindLabel(kind, jobClass) {
@@ -621,7 +692,7 @@ function createTrackedProgress(job, options = {}) {
   };
 }
 
-function buildTaskJob(workspaceRoot, taskMetadata, write) {
+function buildTaskJob(workspaceRoot, taskMetadata, execution = {}) {
   return createCompanionJob({
     prefix: "task",
     kind: "task",
@@ -629,17 +700,38 @@ function buildTaskJob(workspaceRoot, taskMetadata, write) {
     workspaceRoot,
     jobClass: "task",
     summary: taskMetadata.summary,
-    write
+    write: Boolean(execution.write),
+    ...(execution.sandbox ? { sandbox: execution.sandbox } : {})
   });
 }
 
-function buildTaskRequest({ cwd, model, effort, prompt, write, resumeLast, resumeThreadId = null, jobId }) {
+/**
+ * When the caller asked for worktree isolation, create the worktree and pin
+ * the job's execution cwd (`runCwd`) to it. Job state stays in the original
+ * workspace; steer/cancel use `runCwd` to find the job's broker.
+ */
+function setupJobWorktree(cwd, job, options) {
+  if (!options.worktree && !options["worktree-name"]) {
+    return { job, runCwd: cwd, worktree: null };
+  }
+  const created = createCodexWorktree(cwd, options["worktree-name"] ?? job.id);
+  const worktree = { worktreePath: created.worktreePath, branch: created.branch };
+  return {
+    job: { ...job, runCwd: created.worktreePath, worktree },
+    runCwd: created.worktreePath,
+    worktree
+  };
+}
+
+function buildTaskRequest({ cwd, model, effort, prompt, write, sandbox = null, worktree = null, resumeLast, resumeThreadId = null, jobId }) {
   return {
     cwd,
     model,
     effort,
     prompt,
     write,
+    sandbox,
+    worktree,
     resumeLast,
     resumeThreadId,
     jobId
@@ -736,6 +828,8 @@ function enqueueBackgroundTask(cwd, job, request) {
       status: "queued",
       title: job.title,
       summary: job.summary,
+      sandbox: job.sandbox ?? null,
+      worktree: job.worktree ?? null,
       logFile
     },
     logFile
@@ -794,8 +888,8 @@ async function handleReview(argv) {
 
 async function handleTask(argv) {
   const { options, positionals } = parseCommandInput(argv, {
-    valueOptions: ["model", "effort", "cwd", "prompt-file"],
-    booleanOptions: ["json", "write", "resume-last", "resume", "fresh", "background"],
+    valueOptions: ["model", "effort", "cwd", "prompt-file", "sandbox", "worktree-name"],
+    booleanOptions: ["json", "write", "full", "worktree", "resume-last", "resume", "fresh", "background"],
     aliasMap: {
       m: "model"
     }
@@ -812,43 +906,41 @@ async function handleTask(argv) {
   if (resumeLast && fresh) {
     throw new Error("Choose either --resume/--resume-last or --fresh.");
   }
-  const write = Boolean(options.write);
+  requireTaskRequest(prompt, resumeLast);
+  const sandbox = resolveTaskSandbox(options, workspaceRoot);
+  const write = sandbox !== "read-only";
   const taskMetadata = buildTaskRunMetadata({
     prompt,
     resumeLast
   });
 
+  let job = buildTaskJob(workspaceRoot, taskMetadata, { write, sandbox });
+  const worktreeSetup = setupJobWorktree(cwd, job, options);
+  job = worktreeSetup.job;
+  const request = buildTaskRequest({
+    cwd: worktreeSetup.runCwd,
+    model,
+    effort,
+    prompt,
+    write,
+    sandbox,
+    worktree: worktreeSetup.worktree,
+    resumeLast,
+    jobId: job.id
+  });
+
   if (options.background) {
     ensureCodexAvailable(cwd);
-    requireTaskRequest(prompt, resumeLast);
-
-    const job = buildTaskJob(workspaceRoot, taskMetadata, write);
-    const request = buildTaskRequest({
-      cwd,
-      model,
-      effort,
-      prompt,
-      write,
-      resumeLast,
-      jobId: job.id
-    });
     const { payload } = enqueueBackgroundTask(cwd, job, request);
     outputCommandResult(payload, renderQueuedTaskLaunch(payload), options.json);
     return;
   }
 
-  const job = buildTaskJob(workspaceRoot, taskMetadata, write);
   await runForegroundCommand(
     job,
     (progress) =>
       executeTaskRun({
-        cwd,
-        model,
-        effort,
-        prompt,
-        write,
-        resumeLast,
-        jobId: job.id,
+        ...request,
         onProgress: progress
       }),
     { json: options.json }
@@ -1006,7 +1098,8 @@ async function handleCancel(argv) {
   const threadId = existing.threadId ?? job.threadId ?? null;
   const turnId = existing.turnId ?? job.turnId ?? null;
 
-  const interrupt = await interruptAppServerTurn(cwd, { threadId, turnId });
+  // Worktree jobs run (and register their broker) under their own cwd.
+  const interrupt = await interruptAppServerTurn(existing.runCwd ?? job.runCwd ?? cwd, { threadId, turnId });
   if (interrupt.attempted) {
     appendLogLine(
       job.logFile,
@@ -1174,8 +1267,8 @@ function handleAlerts(argv) {
 
 async function handleContinue(argv) {
   const { options, positionals } = parseCommandInput(argv, {
-    valueOptions: ["model", "effort", "cwd"],
-    booleanOptions: ["json", "write", "background"],
+    valueOptions: ["model", "effort", "cwd", "sandbox", "worktree-name"],
+    booleanOptions: ["json", "write", "full", "worktree", "background"],
     aliasMap: {
       m: "model"
     }
@@ -1191,16 +1284,21 @@ async function handleContinue(argv) {
   const model = normalizeRequestedModel(options.model);
   const effort = normalizeReasoningEffort(options.effort);
   const prompt = promptParts.join(" ").trim();
-  const write = Boolean(options.write);
+  const sandbox = resolveTaskSandbox(options, workspaceRoot);
+  const write = sandbox !== "read-only";
 
   const taskMetadata = buildTaskRunMetadata({ prompt, resumeThreadId: threadId });
-  const job = buildTaskJob(workspaceRoot, taskMetadata, write);
+  let job = buildTaskJob(workspaceRoot, taskMetadata, { write, sandbox });
+  const worktreeSetup = setupJobWorktree(cwd, job, options);
+  job = worktreeSetup.job;
   const request = buildTaskRequest({
-    cwd,
+    cwd: worktreeSetup.runCwd,
     model,
     effort,
     prompt,
     write,
+    sandbox,
+    worktree: worktreeSetup.worktree,
     resumeLast: false,
     resumeThreadId: threadId,
     jobId: job.id

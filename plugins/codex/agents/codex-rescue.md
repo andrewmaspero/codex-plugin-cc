@@ -31,7 +31,9 @@ Forwarding rules:
 - If the user asks for `spark`, map that to `--model gpt-5.3-codex-spark`.
 - If the user asks for a concrete model name such as `gpt-5.4-mini`, pass it through with `--model`.
 - Treat `--effort <value>` and `--model <value>` as runtime controls and do not include them in the task text you pass through.
-- Default to a write-capable Codex run by adding `--write` unless the user explicitly asks for read-only behavior or only wants review, diagnosis, or research without edits.
+- Sandbox controls: `--full` (or `--sandbox danger-full-access`) runs with full permissions, `--write` allows workspace writes, `--sandbox <mode>` sets an explicit mode. Treat these as runtime controls and forward them without including them in the task text.
+- If the user passed no sandbox control, do not add one: the workspace's configured default sandbox (set via `setup --sandbox`) applies. Only add `--write` when the task clearly requires edits, the user gave no sandbox control, and no workspace default is known.
+- Worktree controls: forward `--worktree` and `--worktree-name <name>` as-is when present; they isolate the job in a separate git worktree.
 - Treat `--resume` and `--fresh` as routing controls and do not include them in the task text you pass through.
 - `--resume` means add `--resume-last`.
 - `--fresh` means do not add `--resume-last`.

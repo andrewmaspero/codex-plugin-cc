@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 import { isProbablyText } from "./fs.mjs";
@@ -84,6 +85,37 @@ export function ensureGitRepository(cwd) {
     throw new Error("This command must run inside a Git repository.");
   }
   return result.stdout.trim();
+}
+
+export function resolveWorktreeRoot(env = process.env) {
+  return env.CODEX_COMPANION_WORKTREE_ROOT
+    ? path.resolve(env.CODEX_COMPANION_WORKTREE_ROOT)
+    : path.join(os.homedir(), ".codex", "worktrees");
+}
+
+/**
+ * Create an isolated git worktree for a Codex job under the Codex worktree
+ * root (outside the repo, so the main checkout stays clean). Branches are
+ * namespaced `codex/<name>` off the current HEAD.
+ */
+export function createCodexWorktree(cwd, name, options = {}) {
+  ensureGitRepository(cwd);
+  const repoRoot = getRepoRoot(cwd);
+  const repoName = path.basename(repoRoot) || "repo";
+  const safeName =
+    String(name ?? "")
+      .replace(/[^a-zA-Z0-9._-]+/g, "-")
+      .replace(/^-+|-+$/g, "") || "job";
+  const worktreePath = path.join(resolveWorktreeRoot(options.env), `cc-${safeName}`, repoName);
+  if (fs.existsSync(worktreePath)) {
+    throw new Error(
+      `Worktree path already exists: ${worktreePath}. Pass a different --worktree-name or remove it with \`git worktree remove\`.`
+    );
+  }
+  const branch = `codex/${safeName}`;
+  fs.mkdirSync(path.dirname(worktreePath), { recursive: true });
+  gitChecked(repoRoot, ["worktree", "add", "-b", branch, worktreePath]);
+  return { worktreePath, branch, repoRoot };
 }
 
 export function getRepoRoot(cwd) {

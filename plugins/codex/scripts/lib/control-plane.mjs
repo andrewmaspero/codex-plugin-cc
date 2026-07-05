@@ -133,7 +133,8 @@ export function resolveSteerableJob(cwd, reference) {
 export async function steerJob(cwd, reference, message) {
   const text = validateSteerMessage(message);
   const { job, threadId, turnId } = resolveSteerableJob(cwd, reference);
-  const result = await steerAppServerTurn(cwd, { threadId, turnId, text });
+  // Worktree jobs run (and register their broker) under their own cwd.
+  const result = await steerAppServerTurn(job.runCwd ?? cwd, { threadId, turnId, text });
 
   return {
     jobId: job.id,
