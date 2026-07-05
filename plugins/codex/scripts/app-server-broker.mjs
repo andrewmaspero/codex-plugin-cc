@@ -37,6 +37,10 @@ function isInterruptRequest(message) {
   return message?.method === "turn/interrupt";
 }
 
+function isSteerRequest(message) {
+  return message?.method === "turn/steer";
+}
+
 function writePidFile(pidFile) {
   if (!pidFile) {
     return;
@@ -167,12 +171,19 @@ async function main() {
           continue;
         }
 
-        const allowInterruptDuringActiveStream =
-          isInterruptRequest(message) && activeStreamSocket && activeStreamSocket !== socket && !activeRequestSocket;
+        // turn/interrupt and turn/steer are control requests that must reach
+        // the app-server while another socket owns the active stream: both are
+        // non-streaming, return a compact response, and leave stream ownership
+        // (and notification routing) untouched.
+        const allowControlDuringActiveStream =
+          (isInterruptRequest(message) || isSteerRequest(message)) &&
+          activeStreamSocket &&
+          activeStreamSocket !== socket &&
+          !activeRequestSocket;
 
         if (
           ((activeRequestSocket && activeRequestSocket !== socket) || (activeStreamSocket && activeStreamSocket !== socket)) &&
-          !allowInterruptDuringActiveStream
+          !allowControlDuringActiveStream
         ) {
           send(socket, {
             id: message.id,
@@ -181,7 +192,7 @@ async function main() {
           continue;
         }
 
-        if (allowInterruptDuringActiveStream) {
+        if (allowControlDuringActiveStream) {
           try {
             const result = await appClient.request(message.method, message.params ?? {});
             send(socket, { id: message.id, result });

@@ -43,6 +43,22 @@ import {
   sortJobsNewestFirst
 } from "./lib/job-control.mjs";
 import {
+  buildAlertsSnapshot,
+  listItemsCompact,
+  listThreadsCompact,
+  listTurnsCompact,
+  readThreadCompact,
+  renderAlerts,
+  renderItemList,
+  renderSteerResult,
+  renderTail,
+  renderThreadList,
+  renderThreadSummary,
+  renderTurnList,
+  steerJob,
+  tailJobLog
+} from "./lib/control-plane.mjs";
+import {
   appendLogLine,
   createJobLogFile,
   createJobProgressUpdater,
@@ -83,7 +99,15 @@ function printUsage() {
       "  node scripts/codex-companion.mjs transfer [--source <claude-jsonl>] [--json]",
       "  node scripts/codex-companion.mjs status [job-id] [--all] [--json]",
       "  node scripts/codex-companion.mjs result [job-id] [--json]",
-      "  node scripts/codex-companion.mjs cancel [job-id] [--json]"
+      "  node scripts/codex-companion.mjs cancel [job-id] [--json]",
+      "  node scripts/codex-companion.mjs steer <job-id> -- <short corrective instruction>",
+      "  node scripts/codex-companion.mjs threads [--limit <n>] [--cursor <cursor>] [--search <term>] [--all] [--json]",
+      "  node scripts/codex-companion.mjs thread <thread-id> [--json]",
+      "  node scripts/codex-companion.mjs turns <thread-id> [--limit <n>] [--cursor <cursor>] [--json]",
+      "  node scripts/codex-companion.mjs items <thread-id> [--turn <turn-id>] [--type <t1,t2>] [--limit <n>] [--budget <chars>] [--json]",
+      "  node scripts/codex-companion.mjs tail [job-id] [--lines <n>] [--json]",
+      "  node scripts/codex-companion.mjs alerts [job-id] [--stall-seconds <n>] [--json]",
+      "  node scripts/codex-companion.mjs continue <thread-id> [--background] [--write] [--model <model|spark>] [--effort <none|minimal|low|medium|high|xhigh>] [prompt]"
     ].join("\n")
   );
 }
@@ -464,11 +488,12 @@ async function executeTaskRun(request) {
 
   const taskMetadata = buildTaskRunMetadata({
     prompt: request.prompt,
-    resumeLast: request.resumeLast
+    resumeLast: request.resumeLast,
+    resumeThreadId: request.resumeThreadId ?? null
   });
 
-  let resumeThreadId = null;
-  if (request.resumeLast) {
+  let resumeThreadId = request.resumeThreadId ?? null;
+  if (!resumeThreadId && request.resumeLast) {
     const latestThread = await resolveLatestTrackedTaskThread(workspaceRoot, {
       excludeJobId: request.jobId
     });
@@ -537,11 +562,18 @@ function buildReviewJobMetadata(reviewName, target) {
   };
 }
 
-function buildTaskRunMetadata({ prompt, resumeLast = false }) {
-  if (!resumeLast && String(prompt ?? "").includes(STOP_REVIEW_TASK_MARKER)) {
+function buildTaskRunMetadata({ prompt, resumeLast = false, resumeThreadId = null }) {
+  if (!resumeLast && !resumeThreadId && String(prompt ?? "").includes(STOP_REVIEW_TASK_MARKER)) {
     return {
       title: "Codex Stop Gate Review",
       summary: "Stop-gate review of previous Claude turn"
+    };
+  }
+
+  if (resumeThreadId) {
+    return {
+      title: "Codex Continue",
+      summary: shorten(prompt || `Continue ${resumeThreadId}`)
     };
   }
 
@@ -601,7 +633,7 @@ function buildTaskJob(workspaceRoot, taskMetadata, write) {
   });
 }
 
-function buildTaskRequest({ cwd, model, effort, prompt, write, resumeLast, jobId }) {
+function buildTaskRequest({ cwd, model, effort, prompt, write, resumeLast, resumeThreadId = null, jobId }) {
   return {
     cwd,
     model,
@@ -609,6 +641,7 @@ function buildTaskRequest({ cwd, model, effort, prompt, write, resumeLast, jobId
     prompt,
     write,
     resumeLast,
+    resumeThreadId,
     jobId
   };
 }
@@ -1021,6 +1054,176 @@ async function handleCancel(argv) {
   outputCommandResult(payload, renderCancelReport(nextJob), options.json);
 }
 
+async function handleSteer(argv) {
+  const { options, positionals } = parseCommandInput(argv, {
+    valueOptions: ["cwd"],
+    booleanOptions: ["json"]
+  });
+
+  const cwd = resolveCommandCwd(options);
+  const [reference, ...messageParts] = positionals;
+  const payload = await steerJob(cwd, reference ?? "", messageParts.join(" "));
+  outputCommandResult(payload, renderSteerResult(payload), options.json);
+  if (!payload.steered) {
+    process.exitCode = 1;
+  }
+}
+
+async function handleThreads(argv) {
+  const { options } = parseCommandInput(argv, {
+    valueOptions: ["cwd", "limit", "cursor", "search"],
+    booleanOptions: ["json", "all"]
+  });
+
+  const cwd = resolveCommandCwd(options);
+  const payload = await listThreadsCompact(cwd, {
+    limit: options.limit,
+    cursor: options.cursor,
+    search: options.search,
+    all: Boolean(options.all)
+  });
+  outputCommandResult(payload, renderThreadList(payload), options.json);
+}
+
+async function handleThread(argv) {
+  const { options, positionals } = parseCommandInput(argv, {
+    valueOptions: ["cwd"],
+    booleanOptions: ["json"]
+  });
+
+  const threadId = positionals[0];
+  if (!threadId) {
+    throw new Error("Usage: thread <thread-id>. Run `threads` to list thread ids.");
+  }
+
+  const cwd = resolveCommandCwd(options);
+  const payload = await readThreadCompact(cwd, threadId);
+  outputCommandResult(payload, renderThreadSummary(payload), options.json);
+}
+
+async function handleTurns(argv) {
+  const { options, positionals } = parseCommandInput(argv, {
+    valueOptions: ["cwd", "limit", "cursor"],
+    booleanOptions: ["json"]
+  });
+
+  const threadId = positionals[0];
+  if (!threadId) {
+    throw new Error("Usage: turns <thread-id> [--limit <n>] [--cursor <cursor>].");
+  }
+
+  const cwd = resolveCommandCwd(options);
+  const payload = await listTurnsCompact(cwd, {
+    threadId,
+    limit: options.limit,
+    cursor: options.cursor
+  });
+  outputCommandResult(payload, renderTurnList(payload), options.json);
+}
+
+async function handleItems(argv) {
+  const { options, positionals } = parseCommandInput(argv, {
+    valueOptions: ["cwd", "turn", "type", "limit", "budget"],
+    booleanOptions: ["json"]
+  });
+
+  const threadId = positionals[0];
+  if (!threadId) {
+    throw new Error("Usage: items <thread-id> [--turn <turn-id>] [--type <t1,t2>] [--limit <n>] [--budget <chars>].");
+  }
+
+  const cwd = resolveCommandCwd(options);
+  const payload = await listItemsCompact(cwd, {
+    threadId,
+    turnId: options.turn ?? null,
+    types: options.type
+      ? String(options.type)
+          .split(",")
+          .map((value) => value.trim())
+          .filter(Boolean)
+      : null,
+    limit: options.limit,
+    budgetChars: options.budget
+  });
+  outputCommandResult(payload, renderItemList(payload), options.json);
+}
+
+function handleTail(argv) {
+  const { options, positionals } = parseCommandInput(argv, {
+    valueOptions: ["cwd", "lines"],
+    booleanOptions: ["json"]
+  });
+
+  const cwd = resolveCommandCwd(options);
+  const payload = tailJobLog(cwd, positionals[0] ?? "", { lines: options.lines });
+  outputCommandResult(payload, renderTail(payload), options.json);
+}
+
+function handleAlerts(argv) {
+  const { options, positionals } = parseCommandInput(argv, {
+    valueOptions: ["cwd", "stall-seconds"],
+    booleanOptions: ["json"]
+  });
+
+  const cwd = resolveCommandCwd(options);
+  const payload = buildAlertsSnapshot(cwd, positionals[0] ?? "", {
+    stallSeconds: options["stall-seconds"]
+  });
+  outputCommandResult(payload, renderAlerts(payload), options.json);
+}
+
+async function handleContinue(argv) {
+  const { options, positionals } = parseCommandInput(argv, {
+    valueOptions: ["model", "effort", "cwd"],
+    booleanOptions: ["json", "write", "background"],
+    aliasMap: {
+      m: "model"
+    }
+  });
+
+  const [threadId, ...promptParts] = positionals;
+  if (!threadId) {
+    throw new Error("Usage: continue <thread-id> [prompt]. Run `threads` to list thread ids.");
+  }
+
+  const cwd = resolveCommandCwd(options);
+  const workspaceRoot = resolveCommandWorkspace(options);
+  const model = normalizeRequestedModel(options.model);
+  const effort = normalizeReasoningEffort(options.effort);
+  const prompt = promptParts.join(" ").trim();
+  const write = Boolean(options.write);
+
+  const taskMetadata = buildTaskRunMetadata({ prompt, resumeThreadId: threadId });
+  const job = buildTaskJob(workspaceRoot, taskMetadata, write);
+  const request = buildTaskRequest({
+    cwd,
+    model,
+    effort,
+    prompt,
+    write,
+    resumeLast: false,
+    resumeThreadId: threadId,
+    jobId: job.id
+  });
+
+  if (options.background) {
+    ensureCodexAvailable(cwd);
+    const { payload } = enqueueBackgroundTask(cwd, job, request);
+    outputCommandResult(payload, renderQueuedTaskLaunch(payload), options.json);
+    return;
+  }
+
+  await runForegroundCommand(
+    job,
+    (progress) =>
+      executeTaskRun({
+        ...request,
+        onProgress: progress
+      }),
+    { json: options.json }
+  );
+}
+
 async function main() {
   const [subcommand, ...argv] = process.argv.slice(2);
   if (!subcommand || subcommand === "help" || subcommand === "--help") {
@@ -1060,6 +1263,30 @@ async function main() {
       break;
     case "cancel":
       await handleCancel(argv);
+      break;
+    case "steer":
+      await handleSteer(argv);
+      break;
+    case "threads":
+      await handleThreads(argv);
+      break;
+    case "thread":
+      await handleThread(argv);
+      break;
+    case "turns":
+      await handleTurns(argv);
+      break;
+    case "items":
+      await handleItems(argv);
+      break;
+    case "tail":
+      handleTail(argv);
+      break;
+    case "alerts":
+      handleAlerts(argv);
+      break;
+    case "continue":
+      await handleContinue(argv);
       break;
     default:
       throw new Error(`Unknown subcommand: ${subcommand}`);

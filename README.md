@@ -1,4 +1,9 @@
-# Codex plugin for Claude Code
+# Codex plugin for Claude Code — Fable control-plane fork
+
+Fork of [openai/codex-plugin-cc](https://github.com/openai/codex-plugin-cc) that adds a
+token-efficient control-plane for orchestrator models (Fable/Opus) that manage Codex as a
+worker fleet: live turn steering, bounded thread viewers, drift alerts, and explicit
+thread continuation. All upstream commands are unchanged.
 
 Use Codex from inside Claude Code for code reviews or to delegate tasks to Codex.
 
@@ -13,6 +18,14 @@ they already have.
 - `/codex:adversarial-review` for a steerable challenge review
 - `/codex:rescue`, `/codex:transfer`, `/codex:status`, `/codex:result`, and `/codex:cancel` to delegate work, hand off sessions, and manage background jobs
 
+Fork additions (control-plane):
+
+- `/codex:steer <job-id> -- <short correction>` steers the active turn of a running background job via app-server `turn/steer` (works through the shared broker while the job's stream is active)
+- `/codex:threads`, `/codex:thread <id>`, `/codex:turns <id>`, `/codex:items <id>` read Codex threads as compact, paginated, budget-bounded slices — never a full transcript dump
+- `/codex:tail [job-id]` shows the last N job log lines locally
+- `/codex:alerts [job-id]` reports drift as compact alerts: stalls, repeated failing commands, Codex errors, long runtimes — each with evidence and a suggested action
+- `/codex:continue <thread-id> [prompt]` starts a follow-up turn on a specific existing thread (the honest fallback when a job already finished and cannot be steered)
+
 ## Requirements
 
 - **ChatGPT subscription (incl. Free) or OpenAI API key.**
@@ -24,13 +37,13 @@ they already have.
 Add the marketplace in Claude Code:
 
 ```bash
-/plugin marketplace add openai/codex-plugin-cc
+/plugin marketplace add andrewmaspero/codex-plugin-cc
 ```
 
 Install the plugin:
 
 ```bash
-/plugin install codex@openai-codex
+/plugin install codex@codex-fable
 ```
 
 Reload plugins:

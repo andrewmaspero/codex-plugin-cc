@@ -31,7 +31,9 @@ const DEFAULT_CLIENT_INFO = {
 
 /** @type {InitializeCapabilities} */
 const DEFAULT_CAPABILITIES = {
-  experimentalApi: false,
+  // Required for the experimental `thread/turns/list` / `thread/items/list`
+  // read APIs used by the token-efficient thread viewer commands.
+  experimentalApi: true,
   requestAttestation: false,
   optOutNotificationMethods: [
     "item/agentMessage/delta",

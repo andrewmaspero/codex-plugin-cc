@@ -70,17 +70,25 @@ test("adversarial review command uses AskUserQuestion and background Bash while 
   assert.match(source, /can still take extra focus text after the flags/i);
 });
 
-test("continue is not exposed as a user-facing command", () => {
+test("the command manifest covers core commands plus the control-plane surface", () => {
   const commandFiles = fs.readdirSync(path.join(PLUGIN_ROOT, "commands")).sort();
   assert.deepEqual(commandFiles, [
     "adversarial-review.md",
+    "alerts.md",
     "cancel.md",
+    "continue.md",
+    "items.md",
     "rescue.md",
     "result.md",
     "review.md",
     "setup.md",
     "status.md",
-    "transfer.md"
+    "steer.md",
+    "tail.md",
+    "thread.md",
+    "threads.md",
+    "transfer.md",
+    "turns.md"
   ]);
 });
 

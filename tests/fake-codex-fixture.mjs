@@ -458,6 +458,21 @@ rl.on("line", (line) => {
           ? structuredReviewPayload(prompt)
           : taskPayload(prompt, thread.name && thread.name.startsWith("Codex Companion Task") && prompt.includes("Continue from the current thread state"));
 
+        thread.turns = thread.turns || [];
+        thread.turns.push({
+          id: turnId,
+          status: "completed",
+          startedAt: now(),
+          completedAt: now(),
+          durationMs: 100,
+          error: null,
+          items: [
+            { type: "userMessage", id: "user_" + turnId, content: [{ type: "text", text: prompt }] },
+            { type: "agentMessage", id: "msg_" + turnId, text: payload, phase: "final_answer" }
+          ]
+        });
+        saveState(state);
+
         if (
           BEHAVIOR === "with-subagent" ||
           BEHAVIOR === "with-late-subagent-message" ||
@@ -605,6 +620,57 @@ rl.on("line", (line) => {
 	        } else {
 	          emitTurnCompleted(thread.id, turnId, items);
 	        }
+	        break;
+	      }
+
+	      case "thread/read": {
+	        const thread = ensureThread(state, message.params.threadId);
+	        const result = buildThread(thread);
+	        if (message.params.includeTurns) {
+	          result.turns = (thread.turns || []).slice();
+	        }
+	        send({ id: message.id, result: { thread: result } });
+	        break;
+	      }
+
+	      case "thread/turns/list": {
+	        if (BEHAVIOR === "legacy-thread-read") {
+	          send({ id: message.id, error: { code: -32600, message: "Invalid request: unknown variant thread/turns/list" } });
+	          break;
+	        }
+	        if (!state.capabilities || state.capabilities.experimentalApi !== true) {
+	          send({ id: message.id, error: { code: -32600, message: "thread/turns/list requires experimentalApi capability" } });
+	          break;
+	        }
+	        const thread = ensureThread(state, message.params.threadId);
+	        const turns = (thread.turns || []).slice().reverse();
+	        const limit = message.params.limit || turns.length;
+	        send({
+	          id: message.id,
+	          result: {
+	            data: turns.slice(0, limit),
+	            nextCursor: turns.length > limit ? "cursor-1" : null,
+	            backwardsCursor: null
+	          }
+	        });
+	        break;
+	      }
+
+	      case "turn/steer": {
+	        state.lastSteer = {
+	          threadId: message.params.threadId,
+	          expectedTurnId: message.params.expectedTurnId,
+	          text: (message.params.input || [])
+	            .filter((item) => item.type === "text")
+	            .map((item) => item.text)
+	            .join("\\n")
+	        };
+	        saveState(state);
+	        if (!interruptibleTurns.has(message.params.expectedTurnId)) {
+	          send({ id: message.id, error: { code: -32600, message: "no active turn matching expectedTurnId" } });
+	          break;
+	        }
+	        send({ id: message.id, result: { turnId: message.params.expectedTurnId } });
 	        break;
 	      }
 

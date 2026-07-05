@@ -610,7 +610,7 @@ async function captureTurn(client, threadId, startRequest, options = {}) {
   }
 }
 
-async function withAppServer(cwd, fn) {
+export async function withAppServer(cwd, fn) {
   let client = null;
   try {
     client = await CodexAppServerClient.connect(cwd);
@@ -991,6 +991,56 @@ export async function interruptAppServerTurn(cwd, { threadId, turnId }) {
     return {
       attempted: true,
       interrupted: false,
+      transport: client?.transport ?? null,
+      detail: error instanceof Error ? error.message : String(error)
+    };
+  } finally {
+    await client?.close().catch(() => {});
+  }
+}
+
+export async function steerAppServerTurn(cwd, { threadId, turnId, text }) {
+  if (!threadId || !turnId) {
+    return {
+      attempted: false,
+      steered: false,
+      turnId: null,
+      transport: null,
+      detail: "missing threadId or turnId"
+    };
+  }
+
+  const availability = getCodexAvailability(cwd);
+  if (!availability.available) {
+    return {
+      attempted: false,
+      steered: false,
+      turnId: null,
+      transport: null,
+      detail: availability.detail
+    };
+  }
+
+  let client = null;
+  try {
+    client = await CodexAppServerClient.connect(cwd, { reuseExistingBroker: true });
+    const response = await client.request("turn/steer", {
+      threadId,
+      expectedTurnId: turnId,
+      input: buildTurnInput(text)
+    });
+    return {
+      attempted: true,
+      steered: true,
+      turnId: response.turnId ?? turnId,
+      transport: client.transport,
+      detail: `Steered turn ${response.turnId ?? turnId} on ${threadId}.`
+    };
+  } catch (error) {
+    return {
+      attempted: true,
+      steered: false,
+      turnId: null,
       transport: client?.transport ?? null,
       detail: error instanceof Error ? error.message : String(error)
     };
