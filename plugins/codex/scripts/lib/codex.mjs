@@ -403,6 +403,19 @@ function belongsToTurn(state, message) {
   return trackedTurnId === null || messageTurnId === null || messageTurnId === trackedTurnId;
 }
 
+function shouldBypassTurnCapture(message) {
+  return typeof message?.method === "string" && message.method.startsWith("thread/goal/");
+}
+
+function isRootTurnStarted(state, message) {
+  return message.method === "turn/started" && (message.params?.threadId ?? null) === state.threadId && message.params?.turn?.id;
+}
+
+function captureRootTurnStarted(state, message) {
+  state.turnId = message.params.turn.id;
+  state.threadTurnIds.set(state.threadId, state.turnId);
+}
+
 function recordItem(state, item, lifecycle, threadId = null) {
   if (item.type === "collabAgentToolCall") {
     if (!threadId || threadId === state.threadId) {
@@ -561,7 +574,19 @@ async function captureTurn(client, threadId, startRequest, options = {}) {
   const previousHandler = client.notificationHandler;
 
   client.setNotificationHandler((message) => {
+    if (shouldBypassTurnCapture(message)) {
+      if (previousHandler) {
+        previousHandler(message);
+      }
+      return;
+    }
+
     if (!state.turnId) {
+      if (isRootTurnStarted(state, message)) {
+        captureRootTurnStarted(state, message);
+        applyTurnNotification(state, message);
+        return;
+      }
       state.bufferedNotifications.push(message);
       return;
     }
@@ -571,11 +596,17 @@ async function captureTurn(client, threadId, startRequest, options = {}) {
       return;
     }
 
+    if (isRootTurnStarted(state, message)) {
+      captureRootTurnStarted(state, message);
+      applyTurnNotification(state, message);
+      return;
+    }
+
     if (!belongsToTurn(state, message)) {
-        if (previousHandler) {
-          previousHandler(message);
-        }
-        return;
+      if (previousHandler) {
+        previousHandler(message);
+      }
+      return;
     }
 
     applyTurnNotification(state, message);
@@ -589,7 +620,14 @@ async function captureTurn(client, threadId, startRequest, options = {}) {
       state.threadTurnIds.set(state.threadId, state.turnId);
     }
     for (const message of state.bufferedNotifications) {
-      if (belongsToTurn(state, message)) {
+      if (shouldBypassTurnCapture(message)) {
+        if (previousHandler) {
+          previousHandler(message);
+        }
+      } else if (isRootTurnStarted(state, message)) {
+        captureRootTurnStarted(state, message);
+        applyTurnNotification(state, message);
+      } else if (belongsToTurn(state, message)) {
         applyTurnNotification(state, message);
       } else {
         if (previousHandler) {
