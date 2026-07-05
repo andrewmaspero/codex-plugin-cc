@@ -25,6 +25,9 @@ Fork additions (control-plane):
 - `/codex:tail [job-id]` shows the last N job log lines locally
 - `/codex:alerts [job-id]` reports drift as compact alerts: stalls, repeated failing commands, Codex errors, long runtimes — each with evidence and a suggested action
 - `/codex:continue <thread-id> [prompt]` starts a follow-up turn on a specific existing thread (the honest fallback when a job already finished and cannot be steered)
+- `/codex:goal set|show|clear` manages a persistent thread goal (native Codex `thread/goal` support) that anchors long-running loops; goal drift (blocked, budget-limited) surfaces in `/codex:alerts`
+- `/codex:artifacts [job-id]` lists the evidence files (screenshots, reports) a job saved under `.codex-artifacts/<job-id>/`
+- Sandbox trust model: `/codex:setup --sandbox full` makes every job run with full permissions (`danger-full-access`, no prompts); per-call `--full`/`--write`/`--sandbox <mode>` override. `--worktree` isolates a job in its own git worktree instead of a sandbox
 
 ## Requirements
 

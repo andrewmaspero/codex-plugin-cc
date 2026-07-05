@@ -1,7 +1,6 @@
 ---
 description: List a Codex thread's turns newest-first with one-line summaries and pagination
 argument-hint: '<thread-id> [--limit <n>] [--cursor <cursor>]'
-disable-model-invocation: true
 allowed-tools: Bash(node:*)
 ---
 

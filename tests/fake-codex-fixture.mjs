@@ -653,16 +653,63 @@ rl.on("line", (line) => {
 	          break;
 	        }
 	        const thread = ensureThread(state, message.params.threadId);
-	        const turns = (thread.turns || []).slice().reverse();
+	        let turns = (thread.turns || []).slice().reverse();
+	        if (message.params.cursor) {
+	          const parsedCursor = JSON.parse(message.params.cursor);
+	          const anchorIndex = turns.findIndex((turn) => turn.id === parsedCursor.turnId);
+	          if (anchorIndex === -1) {
+	            send({ id: message.id, error: { code: -32600, message: "invalid cursor" } });
+	            break;
+	          }
+	          turns = turns.slice(anchorIndex + 1);
+	        }
 	        const limit = message.params.limit || turns.length;
+	        const page = turns.slice(0, limit);
 	        send({
 	          id: message.id,
 	          result: {
-	            data: turns.slice(0, limit),
-	            nextCursor: turns.length > limit ? "cursor-1" : null,
+	            data: page,
+	            nextCursor:
+	              turns.length > limit && page.length > 0
+	                ? JSON.stringify({ turnId: page[page.length - 1].id, includeAnchor: false })
+	                : null,
 	            backwardsCursor: null
 	          }
 	        });
+	        break;
+	      }
+
+	      case "thread/goal/set": {
+	        const thread = ensureThread(state, message.params.threadId);
+	        const existingGoal = thread.goal || null;
+	        thread.goal = {
+	          threadId: thread.id,
+	          objective: message.params.objective ?? existingGoal?.objective ?? "",
+	          status: message.params.status ?? existingGoal?.status ?? "active",
+	          tokenBudget: message.params.tokenBudget !== undefined ? message.params.tokenBudget : existingGoal?.tokenBudget ?? null,
+	          tokensUsed: existingGoal?.tokensUsed ?? 0,
+	          timeUsedSeconds: existingGoal?.timeUsedSeconds ?? 0,
+	          createdAt: existingGoal?.createdAt ?? now(),
+	          updatedAt: now()
+	        };
+	        state.lastGoalSet = { threadId: thread.id, objective: thread.goal.objective, status: thread.goal.status, tokenBudget: thread.goal.tokenBudget };
+	        saveState(state);
+	        send({ id: message.id, result: { goal: thread.goal } });
+	        break;
+	      }
+
+	      case "thread/goal/get": {
+	        const thread = ensureThread(state, message.params.threadId);
+	        send({ id: message.id, result: { goal: thread.goal || null } });
+	        break;
+	      }
+
+	      case "thread/goal/clear": {
+	        const thread = ensureThread(state, message.params.threadId);
+	        const hadGoal = Boolean(thread.goal);
+	        thread.goal = null;
+	        saveState(state);
+	        send({ id: message.id, result: { cleared: hadGoal } });
 	        break;
 	      }
 

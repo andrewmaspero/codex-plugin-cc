@@ -44,19 +44,26 @@ import {
 } from "./lib/job-control.mjs";
 import {
   buildAlertsSnapshot,
+  clearGoal,
   listItemsCompact,
+  listJobArtifacts,
   listThreadsCompact,
   listTurnsCompact,
   readThreadCompact,
   renderAlerts,
+  renderArtifacts,
+  renderGoalResult,
   renderItemList,
   renderSteerResult,
   renderTail,
   renderThreadList,
   renderThreadSummary,
   renderTurnList,
+  setGoal,
+  showGoal,
   steerJob,
-  tailJobLog
+  tailJobLog,
+  validateGoalObjective
 } from "./lib/control-plane.mjs";
 import {
   appendLogLine,
@@ -104,19 +111,21 @@ function printUsage() {
       "  node scripts/codex-companion.mjs setup [--enable-review-gate|--disable-review-gate] [--sandbox <read-only|write|full|clear>] [--json]",
       "  node scripts/codex-companion.mjs review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>]",
       "  node scripts/codex-companion.mjs adversarial-review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [focus text]",
-      "  node scripts/codex-companion.mjs task [--background] [--write|--full|--sandbox <mode>] [--worktree|--worktree-name <name>] [--resume-last|--resume|--fresh] [--model <model|spark>] [--effort <none|minimal|low|medium|high|xhigh>] [prompt]",
+      "  node scripts/codex-companion.mjs task [--background] [--write|--full|--sandbox <mode>] [--worktree|--worktree-name <name>] [--goal <objective>] [--goal-budget <tokens>] [--resume-last|--resume|--fresh] [--model <model|spark>] [--effort <none|minimal|low|medium|high|xhigh>] [prompt]",
       "  node scripts/codex-companion.mjs transfer [--source <claude-jsonl>] [--json]",
       "  node scripts/codex-companion.mjs status [job-id] [--all] [--json]",
-      "  node scripts/codex-companion.mjs result [job-id] [--json]",
+      "  node scripts/codex-companion.mjs result [job-id] [--full|--max-chars <n>] [--json]",
       "  node scripts/codex-companion.mjs cancel [job-id] [--json]",
       "  node scripts/codex-companion.mjs steer <job-id> -- <short corrective instruction>",
       "  node scripts/codex-companion.mjs threads [--limit <n>] [--cursor <cursor>] [--search <term>] [--all] [--json]",
       "  node scripts/codex-companion.mjs thread <thread-id> [--json]",
       "  node scripts/codex-companion.mjs turns <thread-id> [--limit <n>] [--cursor <cursor>] [--json]",
-      "  node scripts/codex-companion.mjs items <thread-id> [--turn <turn-id>] [--type <t1,t2>] [--limit <n>] [--budget <chars>] [--json]",
+      "  node scripts/codex-companion.mjs items <thread-id> [--turn <turn-id>] [--type <t1,t2>] [--limit <n>] [--cursor <cursor>] [--budget <chars>] [--json]",
       "  node scripts/codex-companion.mjs tail [job-id] [--lines <n>] [--json]",
-      "  node scripts/codex-companion.mjs alerts [job-id] [--stall-seconds <n>] [--json]",
-      "  node scripts/codex-companion.mjs continue <thread-id> [--background] [--write|--full|--sandbox <mode>] [--worktree|--worktree-name <name>] [--model <model|spark>] [--effort <none|minimal|low|medium|high|xhigh>] [prompt]"
+      "  node scripts/codex-companion.mjs alerts [job-id] [--stall-seconds <n>] [--no-goals] [--json]",
+      "  node scripts/codex-companion.mjs goal <set|show|clear> [job-id|thread-id] [--budget <tokens>] [--status <status>] [-- <objective>]",
+      "  node scripts/codex-companion.mjs artifacts [job-id] [--limit <n>] [--json]",
+      "  node scripts/codex-companion.mjs continue <thread-id> [--background] [--write|--full|--sandbox <mode>] [--worktree|--worktree-name <name>] [--goal <objective>] [--goal-budget <tokens>] [--model <model|spark>] [--effort <none|minimal|low|medium|high|xhigh>] [prompt]"
     ].join("\n")
   );
 }
@@ -573,6 +582,7 @@ async function executeTaskRun(request) {
     model: request.model,
     effort: request.effort,
     sandbox: request.sandbox ?? (request.write ? "workspace-write" : "read-only"),
+    goal: request.goal ?? null,
     onProgress: request.onProgress,
     persistThread: true,
     threadName: resumeThreadId ? null : buildPersistentTaskThreadName(request.prompt || DEFAULT_CONTINUE_PROMPT)
@@ -723,7 +733,7 @@ function setupJobWorktree(cwd, job, options) {
   };
 }
 
-function buildTaskRequest({ cwd, model, effort, prompt, write, sandbox = null, worktree = null, resumeLast, resumeThreadId = null, jobId }) {
+function buildTaskRequest({ cwd, model, effort, prompt, write, sandbox = null, worktree = null, goal = null, resumeLast, resumeThreadId = null, jobId }) {
   return {
     cwd,
     model,
@@ -732,9 +742,20 @@ function buildTaskRequest({ cwd, model, effort, prompt, write, sandbox = null, w
     write,
     sandbox,
     worktree,
+    goal,
     resumeLast,
     resumeThreadId,
     jobId
+  };
+}
+
+function resolveGoalOption(options) {
+  if (!options.goal) {
+    return null;
+  }
+  return {
+    objective: validateGoalObjective(options.goal),
+    tokenBudget: options["goal-budget"] != null ? Number(options["goal-budget"]) : null
   };
 }
 
@@ -888,7 +909,7 @@ async function handleReview(argv) {
 
 async function handleTask(argv) {
   const { options, positionals } = parseCommandInput(argv, {
-    valueOptions: ["model", "effort", "cwd", "prompt-file", "sandbox", "worktree-name"],
+    valueOptions: ["model", "effort", "cwd", "prompt-file", "sandbox", "worktree-name", "goal", "goal-budget"],
     booleanOptions: ["json", "write", "full", "worktree", "resume-last", "resume", "fresh", "background"],
     aliasMap: {
       m: "model"
@@ -925,6 +946,7 @@ async function handleTask(argv) {
     write,
     sandbox,
     worktree: worktreeSetup.worktree,
+    goal: resolveGoalOption(options),
     resumeLast,
     jobId: job.id
   });
@@ -1032,10 +1054,12 @@ async function handleStatus(argv) {
   outputResult(renderStatusPayload(report, options.json), options.json);
 }
 
+const DEFAULT_RESULT_MAX_CHARS = 8000;
+
 function handleResult(argv) {
   const { options, positionals } = parseCommandInput(argv, {
-    valueOptions: ["cwd"],
-    booleanOptions: ["json"]
+    valueOptions: ["cwd", "max-chars"],
+    booleanOptions: ["json", "full"]
   });
 
   const cwd = resolveCommandCwd(options);
@@ -1047,7 +1071,13 @@ function handleResult(argv) {
     storedJob
   };
 
-  outputCommandResult(payload, renderStoredJobResult(job, storedJob), options.json);
+  let rendered = renderStoredJobResult(job, storedJob);
+  const maxChars = options.full ? Infinity : Math.max(500, Number(options["max-chars"]) || DEFAULT_RESULT_MAX_CHARS);
+  if (rendered.length > maxChars) {
+    rendered = `${rendered.slice(0, maxChars).trimEnd()}\n\n[Output truncated at ${maxChars} chars of ${rendered.length}. Rerun with --full for everything${job.logFile ? `, or read the job log at ${job.logFile}` : ""}.]\n`;
+  }
+
+  outputCommandResult(payload, rendered, options.json);
 }
 
 function handleTaskResumeCandidate(argv) {
@@ -1216,7 +1246,7 @@ async function handleTurns(argv) {
 
 async function handleItems(argv) {
   const { options, positionals } = parseCommandInput(argv, {
-    valueOptions: ["cwd", "turn", "type", "limit", "budget"],
+    valueOptions: ["cwd", "turn", "type", "limit", "cursor", "budget"],
     booleanOptions: ["json"]
   });
 
@@ -1236,6 +1266,7 @@ async function handleItems(argv) {
           .filter(Boolean)
       : null,
     limit: options.limit,
+    cursor: options.cursor ?? null,
     budgetChars: options.budget
   });
   outputCommandResult(payload, renderItemList(payload), options.json);
@@ -1252,22 +1283,69 @@ function handleTail(argv) {
   outputCommandResult(payload, renderTail(payload), options.json);
 }
 
-function handleAlerts(argv) {
+async function handleAlerts(argv) {
   const { options, positionals } = parseCommandInput(argv, {
     valueOptions: ["cwd", "stall-seconds"],
-    booleanOptions: ["json"]
+    booleanOptions: ["json", "no-goals"]
   });
 
   const cwd = resolveCommandCwd(options);
-  const payload = buildAlertsSnapshot(cwd, positionals[0] ?? "", {
-    stallSeconds: options["stall-seconds"]
+  const payload = await buildAlertsSnapshot(cwd, positionals[0] ?? "", {
+    stallSeconds: options["stall-seconds"],
+    checkGoals: !options["no-goals"]
   });
   outputCommandResult(payload, renderAlerts(payload), options.json);
 }
 
+async function handleGoal(argv) {
+  const { options, positionals } = parseCommandInput(argv, {
+    valueOptions: ["cwd", "budget", "status"],
+    booleanOptions: ["json"]
+  });
+
+  const [action, ...rest] = positionals;
+  const cwd = resolveCommandCwd(options);
+
+  if (action === "set") {
+    const [reference, ...objectiveParts] = rest;
+    const payload = await setGoal(cwd, reference ?? "", objectiveParts.join(" "), {
+      tokenBudget: options.budget != null ? Number(options.budget) : null,
+      status: options.status ?? "active"
+    });
+    outputCommandResult(payload, renderGoalResult(payload), options.json);
+    if (!payload.ok) {
+      process.exitCode = 1;
+    }
+    return;
+  }
+
+  if (action === "show" || action === "clear") {
+    const reference = rest[0] ?? "";
+    const payload = action === "show" ? await showGoal(cwd, reference) : await clearGoal(cwd, reference);
+    outputCommandResult(payload, renderGoalResult(payload), options.json);
+    if (!payload.ok) {
+      process.exitCode = 1;
+    }
+    return;
+  }
+
+  throw new Error("Usage: goal <set|show|clear> [job-id|thread-id] [--budget <tokens>] [--status <status>] [-- <objective>]");
+}
+
+function handleArtifacts(argv) {
+  const { options, positionals } = parseCommandInput(argv, {
+    valueOptions: ["cwd", "limit"],
+    booleanOptions: ["json"]
+  });
+
+  const cwd = resolveCommandCwd(options);
+  const payload = listJobArtifacts(cwd, positionals[0] ?? "", { limit: options.limit });
+  outputCommandResult(payload, renderArtifacts(payload), options.json);
+}
+
 async function handleContinue(argv) {
   const { options, positionals } = parseCommandInput(argv, {
-    valueOptions: ["model", "effort", "cwd", "sandbox", "worktree-name"],
+    valueOptions: ["model", "effort", "cwd", "sandbox", "worktree-name", "goal", "goal-budget"],
     booleanOptions: ["json", "write", "full", "worktree", "background"],
     aliasMap: {
       m: "model"
@@ -1299,6 +1377,7 @@ async function handleContinue(argv) {
     write,
     sandbox,
     worktree: worktreeSetup.worktree,
+    goal: resolveGoalOption(options),
     resumeLast: false,
     resumeThreadId: threadId,
     jobId: job.id
@@ -1381,7 +1460,13 @@ async function main() {
       handleTail(argv);
       break;
     case "alerts":
-      handleAlerts(argv);
+      await handleAlerts(argv);
+      break;
+    case "goal":
+      await handleGoal(argv);
+      break;
+    case "artifacts":
+      handleArtifacts(argv);
       break;
     case "continue":
       await handleContinue(argv);

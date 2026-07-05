@@ -1,7 +1,6 @@
 ---
 description: List recent Codex threads for this workspace, one compact line per thread
 argument-hint: '[--limit <n>] [--cursor <cursor>] [--search <term>] [--all]'
-disable-model-invocation: true
 allowed-tools: Bash(node:*)
 ---
 

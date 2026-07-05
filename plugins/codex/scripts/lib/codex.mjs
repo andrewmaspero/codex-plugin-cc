@@ -1024,11 +1024,25 @@ export async function steerAppServerTurn(cwd, { threadId, turnId, text }) {
   let client = null;
   try {
     client = await CodexAppServerClient.connect(cwd, { reuseExistingBroker: true });
-    const response = await client.request("turn/steer", {
-      threadId,
-      expectedTurnId: turnId,
-      input: buildTurnInput(text)
-    });
+    // The broker lets turn/steer through during an active stream, but a
+    // transient in-flight request on the stream socket can still surface
+    // busy; retry briefly before giving up.
+    let response = null;
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        response = await client.request("turn/steer", {
+          threadId,
+          expectedTurnId: turnId,
+          input: buildTurnInput(text)
+        });
+        break;
+      } catch (error) {
+        if (error?.rpcCode !== BROKER_BUSY_RPC_CODE || attempt >= 2) {
+          throw error;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+    }
     return {
       attempted: true,
       steered: true,
@@ -1043,6 +1057,29 @@ export async function steerAppServerTurn(cwd, { threadId, turnId, text }) {
       turnId: null,
       transport: client?.transport ?? null,
       detail: error instanceof Error ? error.message : String(error)
+    };
+  } finally {
+    await client?.close().catch(() => {});
+  }
+}
+
+/**
+ * Run one thread/goal/* request against the app-server instance reachable
+ * from `cwd` (existing broker when present, ephemeral direct otherwise).
+ * Goal methods pass the broker's control bypass, so they work while a
+ * background turn is streaming.
+ */
+export async function requestThreadGoal(cwd, method, params) {
+  let client = null;
+  try {
+    client = await CodexAppServerClient.connect(cwd, { reuseExistingBroker: true });
+    const result = await client.request(method, params);
+    return { ok: true, transport: client.transport, result };
+  } catch (error) {
+    return {
+      ok: false,
+      transport: client?.transport ?? null,
+      error: error instanceof Error ? error.message : String(error)
     };
   } finally {
     await client?.close().catch(() => {});
@@ -1173,6 +1210,16 @@ export async function runAppServerTurn(cwd, options = {}) {
     emitProgress(options.onProgress, `Thread ready (${threadId}).`, "starting", {
       threadId
     });
+
+    if (options.goal?.objective) {
+      await client.request("thread/goal/set", {
+        threadId,
+        objective: options.goal.objective,
+        status: "active",
+        tokenBudget: options.goal.tokenBudget ?? null
+      });
+      emitProgress(options.onProgress, `Goal set: ${shorten(options.goal.objective, 96)}`, "starting");
+    }
 
     const prompt = options.prompt?.trim() || options.defaultPrompt || "";
     if (!prompt) {

@@ -1,7 +1,6 @@
 ---
 description: Steer the active turn of a running background Codex job with a short corrective instruction
 argument-hint: '<job-id> -- <short corrective instruction>'
-disable-model-invocation: true
 allowed-tools: Bash(node:*)
 ---
 

@@ -1,5 +1,36 @@
 # Changelog
 
+## 1.2.0 (fork)
+
+- Native thread goals: `/codex:goal set|show|clear` over app-server
+  `thread/goal/*`, `--goal`/`--goal-budget` on rescue and continue set the
+  goal before the first turn, and blocked/usage-limited/budget-limited goal
+  statuses surface automatically in `/codex:alerts`. The goal command doc
+  includes guidance on writing checkable goal objectives.
+- The control plane is now model-invocable: removed
+  `disable-model-invocation` from status, result, cancel, steer, continue,
+  and all viewers so an orchestrator agent can poll, steer, and fetch its own
+  background jobs.
+- Argument fidelity: a bare `--` now switches the slash-command tokenizer to
+  verbatim passthrough, so steer corrections and goal objectives keep
+  apostrophes, quotes, and backslashes; pagination cursors are rendered
+  pre-quoted and survive the `$ARGUMENTS` path (tested end to end).
+- `/codex:result` caps rendered output at 8000 chars by default
+  (`--full`/`--max-chars` to override) so job results cannot flood the
+  caller's context.
+- `/codex:artifacts` lists a job's `.codex-artifacts/<job-id>/` evidence
+  directory (screenshot/report convention for computer-use verification).
+- Alert quality: failed-job alerts expire after 30 minutes, command-failure
+  counting is windowed to recent commands, stall detection is
+  timestamp-anchored with a softer suggestion during long-running commands
+  (default threshold 300s), and dead workers are flagged as `orphaned`.
+- Steering hardening: session-scoped no-argument selection, one bounded retry
+  on transient broker-busy, a `Steered:` audit line in the job log with
+  `lastSteerAt` on the job, and an honest failure message when a running
+  job's turn is unreachable (parallel same-workspace jobs).
+- `/codex:items` accepts `--cursor` and turn-id prefixes; viewers print
+  shortened turn ids.
+
 ## 1.1.0 (fork)
 
 - Add `turn/steer` support: `/codex:steer <job-id> -- <correction>` steers the active

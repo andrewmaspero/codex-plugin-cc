@@ -1,7 +1,6 @@
 ---
 description: Show the last N progress log lines for a Codex job (bounded, local, no server call)
 argument-hint: '[job-id] [--lines <n>]'
-disable-model-invocation: true
 allowed-tools: Bash(node:*)
 ---
 

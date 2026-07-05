@@ -21,6 +21,13 @@ import type {
   ThreadResumeResponse,
   ThreadSetNameParams,
   ThreadSetNameResponse,
+  ThreadGoal,
+  ThreadGoalClearParams,
+  ThreadGoalClearResponse,
+  ThreadGoalGetParams,
+  ThreadGoalGetResponse,
+  ThreadGoalSetParams,
+  ThreadGoalSetResponse,
   ThreadStartParams as RawThreadStartParams,
   ThreadStartResponse,
   Turn,
@@ -40,6 +47,8 @@ export type {
   InitializeResponse,
   ReviewTarget,
   Thread,
+  ThreadGoal,
+  ThreadGoalSetParams,
   ThreadItem,
   ThreadListParams,
   ThreadReadParams,
@@ -109,6 +118,9 @@ export interface AppServerMethodMap {
   "review/start": { params: ReviewStartParams; result: ReviewStartResponse };
   "turn/start": { params: TurnStartParams; result: TurnStartResponse };
   "turn/steer": { params: TurnSteerParams; result: TurnSteerResponse };
+  "thread/goal/set": { params: ThreadGoalSetParams; result: ThreadGoalSetResponse };
+  "thread/goal/get": { params: ThreadGoalGetParams; result: ThreadGoalGetResponse };
+  "thread/goal/clear": { params: ThreadGoalClearParams; result: ThreadGoalClearResponse };
   "turn/interrupt": { params: TurnInterruptParams; result: TurnInterruptResponse };
 }
 

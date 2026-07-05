@@ -75,11 +75,13 @@ export function parseArgs(argv, config = {}) {
 
 export function splitRawArgumentString(raw) {
   const tokens = [];
+  const characters = [...raw];
   let current = "";
   let quote = null;
   let escaping = false;
 
-  for (const character of raw) {
+  for (let index = 0; index < characters.length; index += 1) {
+    const character = characters[index];
     if (escaping) {
       current += character;
       escaping = false;
@@ -107,6 +109,17 @@ export function splitRawArgumentString(raw) {
 
     if (/\s/.test(character)) {
       if (current) {
+        // A bare `--` switches to passthrough: the rest of the raw string is
+        // prose (steer corrections, goal objectives) and must keep its
+        // quotes, apostrophes, and backslashes verbatim.
+        if (current === "--") {
+          tokens.push("--");
+          const remainder = characters.slice(index + 1).join("").trim();
+          if (remainder) {
+            tokens.push(remainder);
+          }
+          return tokens;
+        }
         tokens.push(current);
         current = "";
       }

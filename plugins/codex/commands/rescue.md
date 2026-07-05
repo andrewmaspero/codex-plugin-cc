@@ -1,6 +1,6 @@
 ---
 description: Delegate investigation, an explicit fix request, or follow-up rescue work to the Codex rescue subagent
-argument-hint: "[--background|--wait] [--resume|--fresh] [--write|--full|--sandbox <mode>] [--worktree|--worktree-name <name>] [--model <model|spark>] [--effort <none|minimal|low|medium|high|xhigh>] [what Codex should investigate, solve, or continue]"
+argument-hint: "[--background|--wait] [--resume|--fresh] [--write|--full|--sandbox <mode>] [--worktree|--worktree-name <name>] [--goal <objective>] [--model <model|spark>] [--effort <none|minimal|low|medium|high|xhigh>] [what Codex should investigate, solve, or continue]"
 allowed-tools: Bash(node:*), AskUserQuestion, Agent
 ---
 
@@ -18,6 +18,7 @@ Execution mode:
 - If neither flag is present, default to foreground.
 - `--background` and `--wait` are execution flags for Claude Code. Do not forward them to `task`, and do not treat them as part of the natural-language task text.
 - `--model` and `--effort` are runtime-selection flags. Preserve them for the forwarded `task` call, but do not treat them as part of the natural-language task text.
+- `--goal <objective>` and `--goal-budget <tokens>` set a persistent thread goal for long-running loops (see `/codex:goal`). Preserve them for the forwarded `task` call.
 - `--write`, `--full`, `--sandbox <mode>`, `--worktree`, and `--worktree-name <name>` are sandbox/isolation flags. Preserve them for the forwarded `task` call, but do not treat them as part of the natural-language task text. When none are present, the workspace's configured default sandbox applies (set once with `/codex:setup --sandbox full` for trusted full-permission runs).
 - If the request includes `--resume`, do not ask whether to continue. The user already chose.
 - If the request includes `--fresh`, do not ask whether to continue. The user already chose.

@@ -33,12 +33,13 @@ function send(socket, message) {
   socket.write(`${JSON.stringify(message)}\n`);
 }
 
-function isInterruptRequest(message) {
-  return message?.method === "turn/interrupt";
-}
+// Non-streaming control methods that must reach the app-server while another
+// socket owns the active stream. They return compact responses and leave
+// stream ownership (and notification routing) untouched.
+const CONTROL_METHODS = new Set(["turn/interrupt", "turn/steer", "thread/goal/set", "thread/goal/get", "thread/goal/clear"]);
 
-function isSteerRequest(message) {
-  return message?.method === "turn/steer";
+function isControlRequest(message) {
+  return CONTROL_METHODS.has(message?.method);
 }
 
 function writePidFile(pidFile) {
@@ -176,7 +177,7 @@ async function main() {
         // non-streaming, return a compact response, and leave stream ownership
         // (and notification routing) untouched.
         const allowControlDuringActiveStream =
-          (isInterruptRequest(message) || isSteerRequest(message)) &&
+          isControlRequest(message) &&
           activeStreamSocket &&
           activeStreamSocket !== socket &&
           !activeRequestSocket;

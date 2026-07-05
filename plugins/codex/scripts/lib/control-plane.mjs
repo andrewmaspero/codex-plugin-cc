@@ -8,11 +8,14 @@
  * printing anything the calling agent will ingest.
  */
 import fs from "node:fs";
+import path from "node:path";
+import process from "node:process";
 
 import { BROKER_BUSY_RPC_CODE, CodexAppServerClient } from "./app-server.mjs";
-import { steerAppServerTurn } from "./codex.mjs";
-import { listJobs, readJobFile, resolveJobFile } from "./state.mjs";
+import { requestThreadGoal, steerAppServerTurn } from "./codex.mjs";
+import { listJobs, readJobFile, resolveJobFile, upsertJob } from "./state.mjs";
 import { enrichJob, sortJobsNewestFirst } from "./job-control.mjs";
+import { appendLogLine, SESSION_ID_ENV } from "./tracked-jobs.mjs";
 import { resolveWorkspaceRoot } from "./workspace.mjs";
 
 export const STEER_SOFT_WORD_LIMIT = 300;
@@ -28,9 +31,15 @@ export const MAX_TAIL_LINES = 200;
 
 const MAX_TURN_PAGES_PER_SCAN = 5;
 const TURNS_PAGE_SIZE = 20;
-const DEFAULT_STALL_SECONDS = 180;
+const DEFAULT_STALL_SECONDS = 300;
 const LONG_RUNNING_SECONDS = 30 * 60;
 const REPEATED_FAILURE_THRESHOLD = 3;
+const COMMAND_RESULT_WINDOW = 10;
+const FAILED_ALERT_WINDOW_MS = 30 * 60 * 1000;
+const GOAL_ALERT_STATUSES = new Set(["blocked", "usageLimited", "budgetLimited"]);
+
+export const GOAL_OBJECTIVE_MAX_CHARS = 4000;
+export const ARTIFACTS_DIR_NAME = ".codex-artifacts";
 
 function shorten(text, limit = 96) {
   const normalized = String(text ?? "").trim().replace(/\s+/g, " ");
@@ -109,13 +118,15 @@ export function resolveSteerableJob(cwd, reference) {
       throw new Error(`No active job found for "${reference}". Run /codex:status to list jobs.`);
     }
   } else {
-    if (activeJobs.length === 0) {
-      throw new Error("No active Codex jobs to steer.");
+    const sessionId = process.env[SESSION_ID_ENV] ?? null;
+    const sessionJobs = sessionId ? activeJobs.filter((candidate) => candidate.sessionId === sessionId) : activeJobs;
+    if (sessionJobs.length === 0) {
+      throw new Error(sessionId ? "No active Codex jobs to steer for this session." : "No active Codex jobs to steer.");
     }
-    if (activeJobs.length > 1) {
+    if (sessionJobs.length > 1) {
       throw new Error("Multiple Codex jobs are active. Pass a job id to /codex:steer.");
     }
-    job = activeJobs[0];
+    job = sessionJobs[0];
   }
 
   const stored = fs.existsSync(resolveJobFile(workspaceRoot, job.id)) ? readJobFile(resolveJobFile(workspaceRoot, job.id)) : {};
@@ -132,12 +143,18 @@ export function resolveSteerableJob(cwd, reference) {
 
 export async function steerJob(cwd, reference, message) {
   const text = validateSteerMessage(message);
-  const { job, threadId, turnId } = resolveSteerableJob(cwd, reference);
+  const { workspaceRoot, job, threadId, turnId } = resolveSteerableJob(cwd, reference);
   // Worktree jobs run (and register their broker) under their own cwd.
   const result = await steerAppServerTurn(job.runCwd ?? cwd, { threadId, turnId, text });
 
+  if (result.steered) {
+    appendLogLine(job.logFile, `Steered: ${shorten(text, 120)}`);
+    upsertJob(workspaceRoot, { id: job.id, lastSteerAt: new Date().toISOString() });
+  }
+
   return {
     jobId: job.id,
+    jobStatus: job.status,
     threadId,
     expectedTurnId: turnId,
     steered: result.steered,
@@ -155,12 +172,149 @@ export function renderSteerResult(payload) {
     lines.push(`Follow progress with /codex:status ${payload.jobId}.`);
   } else {
     lines.push(`Steering job ${payload.jobId} failed: ${payload.detail}`);
-    lines.push(
-      "If the turn already finished, use /codex:result and /codex:continue instead. If the correction is urgent, /codex:cancel and relaunch with a tighter brief."
-    );
+    if (payload.jobStatus === "running" || payload.jobStatus === "queued") {
+      lines.push(
+        "The job is still active, so its turn is likely running on an app-server this session's broker cannot reach (this happens when several jobs share one workspace). Run parallel jobs in worktrees (--worktree) to keep each steerable, or /codex:cancel and relaunch."
+      );
+    } else {
+      lines.push(
+        "If the turn already finished, use /codex:result and /codex:continue instead. If the correction is urgent, /codex:cancel and relaunch with a tighter brief."
+      );
+    }
   }
   if (payload.softLimitExceeded) {
     lines.push(`Note: the steer message exceeded ${STEER_SOFT_WORD_LIMIT} words. Keep steering deltas short.`);
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+// --- goals ------------------------------------------------------------------
+
+export function validateGoalObjective(text) {
+  const normalized = String(text ?? "").trim();
+  if (!normalized) {
+    throw new Error("Goal objective is empty. Provide the outcome and its checkable acceptance criteria.");
+  }
+  if (normalized.length > GOAL_OBJECTIVE_MAX_CHARS) {
+    throw new Error(
+      `Goal objective is too long (${normalized.length} chars, max ${GOAL_OBJECTIVE_MAX_CHARS}). Write the details to a file and set the objective to "Read the goal file at <path> before continuing. <one-line outcome>".`
+    );
+  }
+  return normalized;
+}
+
+/**
+ * Resolve a goal target from a tracked job id (exact or prefix, any status
+ * with a thread) or, failing that, treat the reference as a thread id.
+ * Without a reference, target the single active job for this session.
+ */
+export function resolveGoalTarget(cwd, reference) {
+  const workspaceRoot = resolveWorkspaceRoot(cwd);
+  const jobs = sortJobsNewestFirst(listJobs(workspaceRoot));
+
+  if (!reference) {
+    const sessionId = process.env[SESSION_ID_ENV] ?? null;
+    const active = jobs.filter((job) => job.status === "queued" || job.status === "running");
+    const scoped = sessionId ? active.filter((job) => job.sessionId === sessionId) : active;
+    if (scoped.length !== 1) {
+      throw new Error(
+        scoped.length === 0
+          ? "No active Codex job found. Pass a job id or thread id."
+          : "Multiple Codex jobs are active. Pass a job id or thread id."
+      );
+    }
+    reference = scoped[0].id;
+  }
+
+  const job = jobs.find((candidate) => candidate.id === reference) ?? jobs.find((candidate) => candidate.id.startsWith(reference)) ?? null;
+  if (job) {
+    if (!job.threadId) {
+      throw new Error(`Job ${job.id} has not reported a Codex thread yet. Wait for /codex:status ${job.id} to show one.`);
+    }
+    return { threadId: job.threadId, connectCwd: job.runCwd ?? cwd, jobId: job.id };
+  }
+
+  return { threadId: reference, connectCwd: cwd, jobId: null };
+}
+
+function compactGoal(goal) {
+  if (!goal) {
+    return null;
+  }
+  return {
+    objective: shorten(goal.objective, 400),
+    status: goal.status ?? null,
+    tokenBudget: goal.tokenBudget ?? null,
+    tokensUsed: goal.tokensUsed ?? 0,
+    timeUsedSeconds: goal.timeUsedSeconds ?? 0,
+    updatedAt: formatTimestamp(goal.updatedAt)
+  };
+}
+
+export async function setGoal(cwd, reference, objective, options = {}) {
+  const normalized = validateGoalObjective(objective);
+  const target = resolveGoalTarget(cwd, reference);
+  const response = await requestThreadGoal(target.connectCwd, "thread/goal/set", {
+    threadId: target.threadId,
+    objective: normalized,
+    status: options.status ?? "active",
+    tokenBudget: options.tokenBudget ?? null
+  });
+  return {
+    action: "set",
+    ...target,
+    ok: response.ok,
+    goal: response.ok ? compactGoal(response.result.goal) : null,
+    error: response.ok ? null : response.error
+  };
+}
+
+export async function showGoal(cwd, reference) {
+  const target = resolveGoalTarget(cwd, reference);
+  const response = await requestThreadGoal(target.connectCwd, "thread/goal/get", { threadId: target.threadId });
+  return {
+    action: "show",
+    ...target,
+    ok: response.ok,
+    goal: response.ok ? compactGoal(response.result.goal) : null,
+    error: response.ok ? null : response.error
+  };
+}
+
+export async function clearGoal(cwd, reference) {
+  const target = resolveGoalTarget(cwd, reference);
+  const response = await requestThreadGoal(target.connectCwd, "thread/goal/clear", { threadId: target.threadId });
+  return {
+    action: "clear",
+    ...target,
+    ok: response.ok,
+    cleared: response.ok ? Boolean(response.result.cleared) : false,
+    error: response.ok ? null : response.error
+  };
+}
+
+export function renderGoalResult(payload) {
+  const label = payload.jobId ? `job ${payload.jobId} (thread ${payload.threadId})` : `thread ${payload.threadId}`;
+  if (!payload.ok) {
+    return `Goal ${payload.action} failed for ${label}: ${payload.error}\n`;
+  }
+
+  if (payload.action === "clear") {
+    return `${payload.cleared ? "Cleared the goal" : "No goal was set"} for ${label}.\n`;
+  }
+
+  if (!payload.goal) {
+    return `No goal is set for ${label}. Set one with /codex:goal set ${payload.jobId ?? payload.threadId} -- <objective>.\n`;
+  }
+
+  const goal = payload.goal;
+  const lines = [
+    `Goal for ${label}: ${goal.status}`,
+    `Objective: ${goal.objective}`,
+    `Usage: ${goal.tokensUsed} tokens${goal.tokenBudget ? ` of ${goal.tokenBudget} budget` : ""}, ${Math.round(goal.timeUsedSeconds / 60)}m elapsed (updated ${goal.updatedAt ?? "?"})`
+  ];
+  if (GOAL_ALERT_STATUSES.has(goal.status)) {
+    lines.push(`The goal is ${goal.status}. Check /codex:tail, then steer, raise the budget, or replan.`);
   }
   return `${lines.join("\n")}\n`;
 }
@@ -376,15 +530,16 @@ export async function listItemsCompact(cwd, options = {}) {
 
   return withReadClient(workspaceRoot, async (client) => {
     const { turns, usedFallback } = await fetchTurnPages(client, options.threadId, {
+      cursor: options.cursor ?? null,
       maxPages: options.turnId ? MAX_TURN_PAGES_PER_SCAN : 1
     });
 
     let scopedTurns = turns;
     if (options.turnId) {
-      scopedTurns = turns.filter((turn) => turn.id === options.turnId);
+      scopedTurns = turns.filter((turn) => turn.id === options.turnId || turn.id.startsWith(options.turnId));
       if (scopedTurns.length === 0) {
         throw new Error(
-          `Turn ${options.turnId} was not found in the ${turns.length} most recent turns of ${options.threadId}. Use /codex:turns ${options.threadId} to list turn ids.`
+          `Turn ${options.turnId} was not found in the ${turns.length} most recent turns of ${options.threadId}. Use /codex:turns ${options.threadId} to list turn ids, or pass --cursor from its output to reach older turns.`
         );
       }
     }
@@ -436,14 +591,16 @@ export async function listItemsCompact(cwd, options = {}) {
 export function renderThreadList(payload) {
   const lines = [];
   if (payload.threads.length === 0) {
-    lines.push("No Codex threads found for this workspace. Use --all to include other directories.");
+    lines.push(
+      "No Codex threads matched this exact workspace directory. Threads started from subdirectories or worktrees have a different cwd — use --all to include everything."
+    );
   }
   for (const thread of payload.threads) {
     const label = thread.name ? `${thread.name} — ` : "";
     lines.push(`${thread.id} | ${thread.updatedAt ?? "?"} | ${label}${thread.preview || "(no preview)"}`);
   }
   if (payload.nextCursor) {
-    lines.push(`More threads available: rerun with --cursor ${payload.nextCursor}`);
+    lines.push(`More threads available: rerun with --cursor '${payload.nextCursor}'`);
   }
   return `${lines.join("\n")}\n`;
 }
@@ -461,12 +618,12 @@ export function renderThreadSummary(thread) {
 }
 
 export function renderTurnList(payload) {
-  const lines = [`Turns for ${payload.threadId} (newest first):`];
+  const lines = [`Turns for ${payload.threadId} (newest first, ids shortened; prefixes work in --turn):`];
   for (const turn of payload.turns) {
     const counts = Object.entries(turn.itemCounts)
       .map(([type, count]) => `${type}:${count}`)
       .join(" ");
-    lines.push(`${turn.id} | ${turn.status ?? "?"} | ${turn.startedAt ?? "?"} | ${counts || "no items"}`);
+    lines.push(`${turn.id.slice(0, 13)} | ${turn.status ?? "?"} | ${turn.startedAt ?? "?"} | ${counts || "no items"}`);
     if (turn.userText) {
       lines.push(`  user: ${turn.userText}`);
     }
@@ -478,10 +635,10 @@ export function renderTurnList(payload) {
     }
   }
   if (payload.nextCursor) {
-    lines.push(`More turns available: rerun with --cursor ${payload.nextCursor}`);
+    lines.push(`More turns available: rerun with --cursor '${payload.nextCursor}'`);
   }
   if (payload.usedFallback) {
-    lines.push("(Served via thread/read fallback; this Codex CLI version lacks paginated turn listing.)");
+    lines.push("(Served via thread/read fallback; this Codex CLI version lacks paginated turn listing, so --cursor is ignored.)");
   }
   return `${lines.join("\n")}\n`;
 }
@@ -494,7 +651,7 @@ export function renderItemList(payload) {
     const detail =
       item.text ?? item.summary ?? item.command ?? item.query ?? item.review ?? item.tool ?? (item.paths ? item.paths.join(", ") : "");
     const status = item.status ? ` [${item.status}${item.exitCode != null ? ` exit ${item.exitCode}` : ""}]` : "";
-    lines.push(`${item.turnId} | ${item.type}${status} | ${detail}`);
+    lines.push(`${item.turnId.slice(0, 13)} | ${item.type}${status} | ${detail}`);
   }
   if (payload.budgetTruncated) {
     lines.push(`Output truncated at ${payload.budgetChars} chars. Narrow with --turn/--type or raise --budget.`);
@@ -539,6 +696,68 @@ export function renderTail(payload) {
   return `${lines.join("\n")}\n`;
 }
 
+// --- artifacts --------------------------------------------------------------
+
+function walkArtifactFiles(dir, baseDir, collected, limit) {
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (collected.length >= limit) {
+      return;
+    }
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      walkArtifactFiles(fullPath, baseDir, collected, limit);
+    } else if (entry.isFile()) {
+      collected.push({
+        path: fullPath,
+        relativePath: path.relative(baseDir, fullPath),
+        bytes: fs.statSync(fullPath).size
+      });
+    }
+  }
+}
+
+/**
+ * List the artifact directory for a job (`<runCwd>/.codex-artifacts/<job-id>/`).
+ * Purely local; the brief convention tells Codex to save screenshots and
+ * evidence there so the controller can Read individual files on demand.
+ */
+export function listJobArtifacts(cwd, reference = "", options = {}) {
+  const workspaceRoot = resolveWorkspaceRoot(cwd);
+  const jobs = sortJobsNewestFirst(listJobs(workspaceRoot));
+  const job = reference
+    ? jobs.find((candidate) => candidate.id === reference) ?? jobs.find((candidate) => candidate.id.startsWith(reference))
+    : jobs[0];
+  if (!job) {
+    throw new Error(reference ? `No job found for "${reference}".` : "No Codex jobs found for this repository.");
+  }
+
+  const dir = path.join(job.runCwd ?? workspaceRoot, ARTIFACTS_DIR_NAME, job.id);
+  const files = [];
+  if (fs.existsSync(dir)) {
+    walkArtifactFiles(dir, dir, files, Math.max(1, Number(options.limit) || 100));
+  }
+  files.sort((left, right) => left.relativePath.localeCompare(right.relativePath));
+
+  return {
+    jobId: job.id,
+    dir,
+    files,
+    totalBytes: files.reduce((sum, file) => sum + file.bytes, 0)
+  };
+}
+
+export function renderArtifacts(payload) {
+  if (payload.files.length === 0) {
+    return `No artifacts for ${payload.jobId}. Briefs should tell Codex to save evidence under ${payload.dir}.\n`;
+  }
+  const lines = [`Artifacts for ${payload.jobId} in ${payload.dir} (${payload.files.length} files, ${Math.round(payload.totalBytes / 1024)} KB):`];
+  for (const file of payload.files) {
+    lines.push(`${file.relativePath} | ${file.bytes} bytes | ${file.path}`);
+  }
+  lines.push("Read only the files that matter; do not bulk-load them.");
+  return `${lines.join("\n")}\n`;
+}
+
 // --- alerts ---------------------------------------------------------------
 
 function parseLogTimestamp(line) {
@@ -548,6 +767,22 @@ function parseLogTimestamp(line) {
   }
   const parsed = Date.parse(match[1]);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function stripLogTimestamp(line) {
+  return line.replace(/^\[[^\]]+\]\s*/, "");
+}
+
+function isProcessAlive(pid) {
+  if (!Number.isFinite(pid) || pid <= 0) {
+    return null;
+  }
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === "EPERM" ? true : false;
+  }
 }
 
 export function buildJobAlerts(job, options = {}) {
@@ -561,12 +796,15 @@ export function buildJobAlerts(job, options = {}) {
       : [];
 
   if (job.status === "failed") {
-    alerts.push({
-      jobId: job.id,
-      kind: "failed",
-      evidence: shorten(job.errorMessage ?? "Job reported failure.", 160),
-      suggestedAction: `Read /codex:result ${job.id}, then relaunch with a corrected brief.`
-    });
+    const completedAt = Date.parse(job.completedAt ?? job.updatedAt ?? "");
+    if (!Number.isFinite(completedAt) || now - completedAt <= FAILED_ALERT_WINDOW_MS) {
+      alerts.push({
+        jobId: job.id,
+        kind: "failed",
+        evidence: shorten(job.errorMessage ?? "Job reported failure.", 160),
+        suggestedAction: `Read /codex:result ${job.id}, then relaunch with a corrected brief.`
+      });
+    }
     return alerts;
   }
 
@@ -574,27 +812,51 @@ export function buildJobAlerts(job, options = {}) {
     return alerts;
   }
 
-  const lastTimestamp = logLines.map(parseLogTimestamp).filter(Boolean).at(-1) ?? Date.parse(job.startedAt ?? job.createdAt ?? "");
-  if (Number.isFinite(lastTimestamp) && now - lastTimestamp > stallSeconds * 1000) {
+  if (job.status === "running" && isProcessAlive(job.pid) === false) {
     alerts.push({
       jobId: job.id,
-      kind: "stalled",
-      evidence: `No progress events for ${Math.round((now - lastTimestamp) / 1000)}s (threshold ${stallSeconds}s).`,
-      suggestedAction: `Check /codex:tail ${job.id}; if truly stuck, /codex:cancel ${job.id} and relaunch.`
+      kind: "orphaned",
+      evidence: `Worker process ${job.pid} is no longer alive but the job is still marked running.`,
+      suggestedAction: `/codex:cancel ${job.id} to mark it finished, then relaunch if the work is still needed.`
     });
   }
 
-  const failedCommands = logLines.filter((line) => /Command (?:failed|completed):.*\(exit (?!0\))\d+\)/.test(line));
-  if (failedCommands.length >= REPEATED_FAILURE_THRESHOLD) {
+  // Only item start/complete events reach the log (message deltas are opted
+  // out), so a long-running command or reasoning stretch is quiet. Anchor
+  // everything on the timestamp prefix to avoid matching command text.
+  const strippedLines = logLines.filter((line) => parseLogTimestamp(line) != null).map(stripLogTimestamp);
+  const lastTimestamp = logLines.map(parseLogTimestamp).filter(Boolean).at(-1) ?? Date.parse(job.startedAt ?? job.createdAt ?? "");
+  if (Number.isFinite(lastTimestamp) && now - lastTimestamp > stallSeconds * 1000) {
+    const lastLine = strippedLines.at(-1) ?? "";
+    const midCommand = lastLine.startsWith("Running command:");
+    alerts.push({
+      jobId: job.id,
+      kind: "stalled",
+      evidence: `No progress events for ${Math.round((now - lastTimestamp) / 1000)}s (threshold ${stallSeconds}s).${midCommand ? " Last event started a command, which may still be running." : ""}`,
+      suggestedAction: midCommand
+        ? `Check /codex:tail ${job.id}; a slow test/build may just be running. Cancel only if it clearly hung.`
+        : `Check /codex:tail ${job.id}; if truly stuck, /codex:cancel ${job.id} and relaunch.`
+    });
+  }
+
+  const commandResults = strippedLines
+    .filter((line) => /^Command (?:failed|completed):/.test(line))
+    .slice(-COMMAND_RESULT_WINDOW);
+  const recentFailures = commandResults.filter((line) => {
+    const exit = /\(exit (\d+)\)\s*$/.exec(line);
+    return exit ? exit[1] !== "0" : /^Command failed:/.test(line);
+  });
+  const latestIsFailure = commandResults.length > 0 && recentFailures.at(-1) === commandResults.at(-1);
+  if (recentFailures.length >= REPEATED_FAILURE_THRESHOLD && latestIsFailure) {
     alerts.push({
       jobId: job.id,
       kind: "repeated-command-failures",
-      evidence: `${failedCommands.length} failing commands, latest: ${shorten(failedCommands.at(-1), 140)}`,
+      evidence: `${recentFailures.length} of the last ${commandResults.length} commands failed, latest: ${shorten(recentFailures.at(-1), 140)}`,
       suggestedAction: `Steer with a narrower instruction (/codex:steer ${job.id} ...) or cancel and tighten the brief.`
     });
   }
 
-  const errorLines = logLines.filter((line) => line.includes("Codex error:"));
+  const errorLines = strippedLines.filter((line) => line.startsWith("Codex error:"));
   if (errorLines.length > 0) {
     alerts.push({
       jobId: job.id,
@@ -617,7 +879,35 @@ export function buildJobAlerts(job, options = {}) {
   return alerts;
 }
 
-export function buildAlertsSnapshot(cwd, reference = "", options = {}) {
+async function collectGoalAlerts(cwd, jobs) {
+  const alerts = [];
+  let checkErrors = 0;
+  for (const job of jobs) {
+    if ((job.status !== "running" && job.status !== "queued") || !job.threadId) {
+      continue;
+    }
+    const response = await requestThreadGoal(job.runCwd ?? cwd, "thread/goal/get", { threadId: job.threadId });
+    if (!response.ok) {
+      checkErrors += 1;
+      continue;
+    }
+    const goal = response.result.goal;
+    if (goal && GOAL_ALERT_STATUSES.has(goal.status)) {
+      alerts.push({
+        jobId: job.id,
+        kind: `goal-${goal.status}`,
+        evidence: `Goal "${shorten(goal.objective, 100)}" is ${goal.status} (${goal.tokensUsed ?? 0} tokens used${goal.tokenBudget ? ` of ${goal.tokenBudget}` : ""}).`,
+        suggestedAction:
+          goal.status === "blocked"
+            ? `Check /codex:tail ${job.id} for the blocker, then /codex:steer ${job.id} -- <unblock instruction>.`
+            : `Raise the budget with /codex:goal set ${job.id} --budget <tokens> -- <same objective>, or wind the job down.`
+      });
+    }
+  }
+  return { alerts, checkErrors };
+}
+
+export async function buildAlertsSnapshot(cwd, reference = "", options = {}) {
   const workspaceRoot = resolveWorkspaceRoot(cwd);
   const jobs = sortJobsNewestFirst(listJobs(workspaceRoot));
   const scoped = reference
@@ -629,10 +919,18 @@ export function buildAlertsSnapshot(cwd, reference = "", options = {}) {
   }
 
   const alerts = scoped.flatMap((job) => buildJobAlerts(enrichJob(job), options));
+  let goalCheckErrors = 0;
+  if (options.checkGoals !== false) {
+    const goalAlerts = await collectGoalAlerts(cwd, scoped);
+    alerts.push(...goalAlerts.alerts);
+    goalCheckErrors = goalAlerts.checkErrors;
+  }
+
   return {
     workspaceRoot,
     checkedJobs: scoped.map((job) => ({ id: job.id, status: job.status })),
-    alerts
+    alerts,
+    goalCheckErrors
   };
 }
 
