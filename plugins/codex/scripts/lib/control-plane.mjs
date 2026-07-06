@@ -13,7 +13,7 @@ import process from "node:process";
 
 import { BROKER_BUSY_RPC_CODE, CodexAppServerClient } from "./app-server.mjs";
 import { requestThreadGoal, steerAppServerTurn } from "./codex.mjs";
-import { listJobs, readJobFile, resolveJobFile, resolveJobFileGlobally, upsertJob } from "./state.mjs";
+import { listJobs, readJobFile, resolveJobFile, resolveJobFileGlobally, updateState, upsertJob, writeJobFile } from "./state.mjs";
 import { enrichJob, reapOrphanedJobs, sortJobsNewestFirst } from "./job-control.mjs";
 import { isProcessAlive } from "./process.mjs";
 import { appendLogLine, SESSION_ID_ENV } from "./tracked-jobs.mjs";
@@ -33,6 +33,8 @@ export const MAX_TAIL_LINES = 200;
 const MAX_TURN_PAGES_PER_SCAN = 5;
 const TURNS_PAGE_SIZE = 20;
 const DEFAULT_STALL_SECONDS = 300;
+// Native reviews heartbeat every 60s; 2.5 missed beats = wedged.
+const REVIEW_HEARTBEAT_STALL_SECONDS = 150;
 const LONG_RUNNING_SECONDS = 30 * 60;
 const REPEATED_FAILURE_THRESHOLD = 3;
 const COMMAND_RESULT_WINDOW = 10;
@@ -801,6 +803,146 @@ export function renderArtifacts(payload) {
   return `${lines.join("\n")}\n`;
 }
 
+// --- completed-but-unreconciled reconciliation ------------------------------
+
+const RECONCILE_QUIET_MS = 60 * 1000;
+const TERMINAL_TURN_STATUSES = new Set(["completed", "failed", "interrupted"]);
+
+function jobLastActivityMs(job) {
+  if (job.logFile && fs.existsSync(job.logFile)) {
+    try {
+      return fs.statSync(job.logFile).mtimeMs;
+    } catch {
+      // Fall through to record timestamps.
+    }
+  }
+  const fallback = Date.parse(job.updatedAt ?? job.startedAt ?? job.createdAt ?? "");
+  return Number.isFinite(fallback) ? fallback : 0;
+}
+
+function extractTurnStatusValue(turn) {
+  return typeof turn?.status === "string" ? turn.status : turn?.status?.type ?? null;
+}
+
+function finalizeReconciledJob(workspaceRoot, job, latestTurn, status, lastAgentText) {
+  const completedAt = new Date().toISOString();
+  const jobStatus = status === "completed" ? "completed" : "failed";
+  const note = `Job finalized by read-side reconciliation: the thread's latest turn (${latestTurn.id}) is ${status} but the worker never recorded a result.`;
+  const patch = {
+    status: jobStatus,
+    phase: jobStatus === "completed" ? "done" : "failed",
+    pid: null,
+    completedAt,
+    reconciledBy: "read-reconciler",
+    ...(jobStatus === "failed" ? { errorMessage: note } : {})
+  };
+
+  let reconciled = false;
+  updateState(workspaceRoot, (state) => {
+    const index = state.jobs.findIndex((candidate) => candidate.id === job.id);
+    if (index === -1) {
+      return;
+    }
+    const current = state.jobs[index];
+    if (current.status !== "running" && current.status !== "queued") {
+      return;
+    }
+    state.jobs[index] = { ...current, ...patch, updatedAt: completedAt };
+    reconciled = true;
+  });
+
+  if (!reconciled) {
+    return false;
+  }
+
+  const jobFile = resolveJobFile(workspaceRoot, job.id);
+  let stored = {};
+  try {
+    stored = fs.existsSync(jobFile) ? readJobFile(jobFile) : {};
+  } catch {
+    stored = {};
+  }
+  writeJobFile(workspaceRoot, job.id, {
+    ...stored,
+    ...patch,
+    result: stored.result ?? {
+      status: jobStatus === "completed" ? 0 : 1,
+      threadId: job.threadId,
+      rawOutput: lastAgentText ?? "",
+      reconciledBy: "read-reconciler"
+    },
+    rendered: stored.rendered ?? (lastAgentText || note)
+  });
+  appendLogLine(job.logFile, note);
+  return true;
+}
+
+/**
+ * Detect running jobs whose thread already has a terminal latest turn newer
+ * than the job's last activity, and finalize them inline. This is the
+ * read-side safety net for alive-but-hung workers (pid checks pass, so
+ * reapOrphanedJobs never fires): `status --wait` and `alerts` finalize the
+ * job instead of waiting on a worker that will never write again.
+ * Returns descriptors of the jobs it reconciled.
+ */
+export async function reconcileCompletedTurnJobs(cwd, jobs, options = {}) {
+  const envQuietMs = Number(process.env.CODEX_COMPANION_RECONCILE_QUIET_MS);
+  const quietMs =
+    Number.isFinite(envQuietMs) && envQuietMs > 0
+      ? envQuietMs
+      : Math.max(5000, Number(options.quietMs) || RECONCILE_QUIET_MS);
+  const now = options.now ?? Date.now();
+  const candidates = (jobs ?? []).filter((job) => {
+    if (job.status !== "running" && job.status !== "queued") {
+      return false;
+    }
+    if (!job.threadId) {
+      return false;
+    }
+    return now - jobLastActivityMs(job) >= quietMs;
+  });
+  if (candidates.length === 0) {
+    return [];
+  }
+
+  const reconciled = [];
+  for (const job of candidates) {
+    const workspaceRoot = job.workspaceRoot ?? resolveWorkspaceRoot(cwd);
+    try {
+      const outcome = await withReadClient(job.runCwd ?? workspaceRoot, async (client) => {
+        const response = await client.request("thread/turns/list", {
+          threadId: job.threadId,
+          cursor: null,
+          limit: 1,
+          sortDirection: "desc",
+          itemsView: "full"
+        });
+        return response?.data?.[0] ?? null;
+      });
+      const status = extractTurnStatusValue(outcome);
+      if (!outcome || !TERMINAL_TURN_STATUSES.has(status)) {
+        continue;
+      }
+      // Only reconcile when the terminal turn belongs to this job's run: it
+      // must have started at or after the job did (a resumed thread's stale
+      // last turn must not complete a job whose own turn never started).
+      const turnEndedMs = (outcome.completedAt ?? outcome.startedAt ?? 0) * 1000;
+      const jobStartedMs = Date.parse(job.startedAt ?? job.createdAt ?? "") || 0;
+      if (turnEndedMs && jobStartedMs && turnEndedMs < jobStartedMs - 5000) {
+        continue;
+      }
+      const lastAgent = [...(outcome.items ?? [])].reverse().find((item) => item?.type === "agentMessage" && item.text);
+      if (finalizeReconciledJob(workspaceRoot, job, outcome, status, lastAgent?.text ?? null)) {
+        reconciled.push({ jobId: job.id, threadId: job.threadId, turnId: outcome.id, turnStatus: status });
+      }
+    } catch {
+      // Unsupported CLI, busy runtime, or unreadable thread: leave the job to
+      // the other reconciliation layers (worker poll, notify hook, pid reaper).
+    }
+  }
+  return reconciled;
+}
+
 // --- alerts ---------------------------------------------------------------
 
 function parseLogTimestamp(line) {
@@ -857,13 +999,23 @@ export function buildJobAlerts(job, options = {}) {
   // everything on the timestamp prefix to avoid matching command text.
   const strippedLines = logLines.filter((line) => parseLogTimestamp(line) != null).map(stripLogTimestamp);
   const lastTimestamp = logLines.map(parseLogTimestamp).filter(Boolean).at(-1) ?? Date.parse(job.startedAt ?? job.createdAt ?? "");
-  if (Number.isFinite(lastTimestamp) && now - lastTimestamp > stallSeconds * 1000) {
+  // Native review turns emit no item events but the worker logs a heartbeat
+  // every 60s, so silence there means "worker wedged", not "review thinking".
+  // Alert on missed heartbeats (a much tighter threshold) instead of the
+  // generic no-events stall.
+  const isNativeReview = job.kind === "review";
+  const effectiveStallSeconds = isNativeReview
+    ? Math.max(30, Number(options.stallSeconds) || REVIEW_HEARTBEAT_STALL_SECONDS)
+    : stallSeconds;
+  if (Number.isFinite(lastTimestamp) && now - lastTimestamp > effectiveStallSeconds * 1000) {
     const lastLine = strippedLines.at(-1) ?? "";
     const midCommand = lastLine.startsWith("Running command:");
     alerts.push({
       jobId: job.id,
       kind: "stalled",
-      evidence: `No progress events for ${Math.round((now - lastTimestamp) / 1000)}s (threshold ${stallSeconds}s).${midCommand ? " Last event started a command, which may still be running." : ""}`,
+      evidence: isNativeReview
+        ? `No reviewer heartbeat for ${Math.round((now - lastTimestamp) / 1000)}s (the review worker logs one every 60s; threshold ${effectiveStallSeconds}s). The worker is likely wedged, not thinking.`
+        : `No progress events for ${Math.round((now - lastTimestamp) / 1000)}s (threshold ${effectiveStallSeconds}s).${midCommand ? " Last event started a command, which may still be running." : ""}`,
       suggestedAction: midCommand
         ? `Check /codex:tail ${job.id}; a slow test/build may just be running. Cancel only if it clearly hung.`
         : `Check /codex:tail ${job.id}; if truly stuck, /codex:cancel ${job.id} and relaunch.`
@@ -943,7 +1095,17 @@ export async function buildAlertsSnapshot(cwd, reference = "", options = {}) {
   // Reap dead workers before building alerts so an orphan surfaces as a
   // terminal "failed" alert (and status pollers stop waiting on it) instead
   // of an advisory on a job that still claims to be running.
-  const jobs = sortJobsNewestFirst(reapOrphanedJobs(workspaceRoot, listJobs(workspaceRoot), options));
+  let jobs = sortJobsNewestFirst(reapOrphanedJobs(workspaceRoot, listJobs(workspaceRoot), options));
+
+  // Alive-but-hung workers: finalize running jobs whose thread already shows
+  // a terminal latest turn, and surface each as a precise alert instead of a
+  // generic "stalled".
+  const reconciledJobs =
+    options.reconcileTurns === false ? [] : await reconcileCompletedTurnJobs(cwd, jobs, options).catch(() => []);
+  if (reconciledJobs.length > 0) {
+    jobs = sortJobsNewestFirst(listJobs(workspaceRoot));
+  }
+
   const scoped = reference
     ? jobs.filter((job) => job.id === reference || job.id.startsWith(reference))
     : jobs.filter((job) => job.status === "queued" || job.status === "running" || job.status === "failed");
@@ -953,6 +1115,17 @@ export async function buildAlertsSnapshot(cwd, reference = "", options = {}) {
   }
 
   const alerts = scoped.flatMap((job) => buildJobAlerts(enrichJob(job), options));
+  for (const entry of reconciledJobs) {
+    if (reference && !(entry.jobId === reference || entry.jobId.startsWith(reference))) {
+      continue;
+    }
+    alerts.push({
+      jobId: entry.jobId,
+      kind: "completed-but-unreconciled",
+      evidence: `Thread ${entry.threadId} showed a terminal latest turn (${entry.turnId} ${entry.turnStatus}) while the job was still marked running with no progress; the job record has been finalized inline.`,
+      suggestedAction: `Read /codex:result ${entry.jobId} and verify the working tree; the worker never recorded the result itself.`
+    });
+  }
   let goalCheckErrors = 0;
   if (options.checkGoals !== false) {
     const goalAlerts = await collectGoalAlerts(cwd, scoped);

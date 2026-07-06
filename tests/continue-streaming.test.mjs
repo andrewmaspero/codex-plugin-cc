@@ -46,7 +46,7 @@ function readJobs(repo) {
   return JSON.parse(fs.readFileSync(stateFile, "utf8")).jobs;
 }
 
-async function waitFor(predicate, { timeoutMs = 30000, intervalMs = 50 } = {}) {
+async function waitFor(predicate, { timeoutMs = 90000, intervalMs = 50 } = {}) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     const value = await predicate();

@@ -12,6 +12,7 @@ import net from "node:net";
 import process from "node:process";
 import { spawn } from "node:child_process";
 import readline from "node:readline";
+import { fileURLToPath } from "node:url";
 import { parseBrokerEndpoint } from "./broker-endpoint.mjs";
 import { ensureBrokerSession, loadBrokerSession } from "./broker-lifecycle.mjs";
 import { terminateProcessTree } from "./process.mjs";
@@ -21,6 +22,20 @@ const PLUGIN_MANIFEST = JSON.parse(fs.readFileSync(PLUGIN_MANIFEST_URL, "utf8"))
 
 export const BROKER_ENDPOINT_ENV = "CODEX_COMPANION_APP_SERVER_ENDPOINT";
 export const BROKER_BUSY_RPC_CODE = -32001;
+export const DISABLE_TURN_HOOK_ENV = "CODEX_COMPANION_DISABLE_TURN_HOOK";
+
+const TURN_COMPLETE_HOOK_URL = new URL("../turn-complete-hook.mjs", import.meta.url);
+
+/**
+ * `-c notify=[...]` argv for `codex app-server`: codex invokes the plugin's
+ * turn-complete hook with an agent-turn-complete payload whenever a turn
+ * finishes, making job finalization durable even if the worker process dies
+ * or its event stream drops (see scripts/turn-complete-hook.mjs).
+ */
+export function buildTurnCompleteNotifyArgs(execPath = process.execPath) {
+  const hookPath = fileURLToPath(TURN_COMPLETE_HOOK_URL);
+  return ["-c", `notify=[${JSON.stringify(execPath)},${JSON.stringify(hookPath)}]`];
+}
 
 /** @type {ClientInfo} */
 const DEFAULT_CLIENT_INFO = {
@@ -195,10 +210,13 @@ class SpawnedCodexAppServerClient extends AppServerClientBase {
   constructor(cwd, options = {}) {
     super(cwd, options);
     this.transport = "direct";
+    const env = options.env ?? process.env;
+    this.turnCompleteHookEnabled = !options.disableTurnCompleteHook && !env?.[DISABLE_TURN_HOOK_ENV];
   }
 
   async initialize() {
-    this.proc = spawn("codex", ["app-server"], {
+    const args = ["app-server", ...(this.turnCompleteHookEnabled ? buildTurnCompleteNotifyArgs() : [])];
+    this.proc = spawn("codex", args, {
       cwd: this.cwd,
       env: this.options.env ?? process.env,
       stdio: ["pipe", "pipe", "pipe"],
@@ -364,10 +382,26 @@ export class CodexAppServerClient {
         brokerEndpoint = brokerSession?.endpoint ?? null;
       }
     }
-    const client = brokerEndpoint
-      ? new BrokerCodexAppServerClient(cwd, { ...options, brokerEndpoint })
-      : new SpawnedCodexAppServerClient(cwd, options);
-    await client.initialize();
-    return client;
+    if (brokerEndpoint) {
+      const client = new BrokerCodexAppServerClient(cwd, { ...options, brokerEndpoint });
+      await client.initialize();
+      return client;
+    }
+
+    const client = new SpawnedCodexAppServerClient(cwd, options);
+    try {
+      await client.initialize();
+      return client;
+    } catch (error) {
+      // Older codex CLIs may reject `-c` overrides on app-server: fall back to
+      // a plain spawn (losing the turn-complete hook, not the whole runtime).
+      if (!client.turnCompleteHookEnabled) {
+        throw error;
+      }
+      await client.close().catch(() => {});
+      const fallback = new SpawnedCodexAppServerClient(cwd, { ...options, disableTurnCompleteHook: true });
+      await fallback.initialize();
+      return fallback;
+    }
   }
 }

@@ -50,6 +50,7 @@ import {
 import {
   buildAlertsSnapshot,
   clearGoal,
+  reconcileCompletedTurnJobs,
   listItemsCompact,
   listJobArtifacts,
   listThreadsCompact,
@@ -102,6 +103,9 @@ const WAIT_STAT_FALLBACK_MS = 2000;
 // A dead worker never touches its job file again, so `wait` must pid-check
 // periodically and reap, or it hangs to timeout on orphaned jobs.
 const WAIT_REAP_INTERVAL_MS = 5000;
+// Alive-but-hung workers pass pid checks, so waiters also reconcile against
+// the thread's latest turn state (bounded to one app-server query per window).
+const WAIT_TURN_RECONCILE_INTERVAL_MS = 30000;
 const VALID_REASONING_EFFORTS = new Set(["none", "minimal", "low", "medium", "high", "xhigh"]);
 const MODEL_ALIASES = new Map([["spark", "gpt-5.3-codex-spark"]]);
 const SANDBOX_ALIASES = new Map([
@@ -433,9 +437,17 @@ async function waitForSingleJobSnapshot(cwd, reference, options = {}) {
   const pollIntervalMs = Math.max(100, Number(options.pollIntervalMs) || DEFAULT_STATUS_POLL_INTERVAL_MS);
   const deadline = Date.now() + timeoutMs;
   let snapshot = buildSingleJobSnapshot(cwd, reference);
+  let lastTurnReconcileAt = Date.now();
 
   while (isActiveJobStatus(snapshot.job.status) && Date.now() < deadline) {
     await sleep(Math.min(pollIntervalMs, Math.max(0, deadline - Date.now())));
+    if (Date.now() - lastTurnReconcileAt >= WAIT_TURN_RECONCILE_INTERVAL_MS) {
+      lastTurnReconcileAt = Date.now();
+      // Finalize inline when the thread's latest turn is terminal but the
+      // (possibly hung) worker never wrote a result; the next snapshot then
+      // returns promptly instead of waiting out the timeout.
+      await reconcileCompletedTurnJobs(cwd, [snapshot.job]).catch(() => []);
+    }
     snapshot = buildSingleJobSnapshot(cwd, reference);
   }
 
@@ -530,12 +542,29 @@ async function waitForGlobalJob(cwd, jobId, options = {}) {
       watcher = null;
     }
 
+    let turnReconcileInFlight = false;
+    let lastTurnReconcileAt = Date.now();
     const reapCheck = () => {
       try {
         const job = readJobFile(jobFile);
-        if (isActiveJobStatus(job.status ?? "unknown") && isProcessAlive(job.pid) === false) {
+        if (!isActiveJobStatus(job.status ?? "unknown")) {
+          return;
+        }
+        if (isProcessAlive(job.pid) === false) {
           reapOrphanedJobs(job.workspaceRoot ?? workspaceRoot, [job]);
           check();
+          return;
+        }
+        // Alive-but-hung worker: reconcile against the thread's latest turn.
+        if (!turnReconcileInFlight && Date.now() - lastTurnReconcileAt >= WAIT_TURN_RECONCILE_INTERVAL_MS) {
+          turnReconcileInFlight = true;
+          lastTurnReconcileAt = Date.now();
+          reconcileCompletedTurnJobs(job.workspaceRoot ?? workspaceRoot, [job])
+            .catch(() => [])
+            .finally(() => {
+              turnReconcileInFlight = false;
+              check();
+            });
         }
       } catch {
         // Job file mid-rename; the next tick retries.
@@ -573,6 +602,30 @@ async function resolveLatestTrackedTaskThread(cwd, options = {}) {
   return findLatestTaskThread(workspaceRoot);
 }
 
+const DEFAULT_REVIEW_HEARTBEAT_MS = 60000;
+
+/**
+ * Native review turns emit no incremental item events, so a long review is
+ * indistinguishable from a wedged one (OBS-1): synthesize a heartbeat line
+ * into the job log so `tail` has signal and `alerts` can distinguish
+ * "reviewer alive" from "reviewer silent".
+ */
+function startReviewHeartbeat(onProgress) {
+  if (!onProgress) {
+    return () => {};
+  }
+  const intervalMs = Math.max(1000, Number(process.env.CODEX_COMPANION_REVIEW_HEARTBEAT_MS) || DEFAULT_REVIEW_HEARTBEAT_MS);
+  const startedAt = Date.now();
+  const timer = setInterval(() => {
+    onProgress({
+      message: `Still waiting on the review turn (${Math.round((Date.now() - startedAt) / 1000)}s elapsed; reviews emit no incremental events).`,
+      phase: "reviewing"
+    });
+  }, intervalMs);
+  timer.unref?.();
+  return () => clearInterval(timer);
+}
+
 async function executeReviewRun(request) {
   ensureCodexAvailable(request.cwd);
   ensureGitRepository(request.cwd);
@@ -585,11 +638,17 @@ async function executeReviewRun(request) {
   const reviewName = request.reviewName ?? "Review";
   if (reviewName === "Review") {
     const reviewTarget = validateNativeReviewRequest(target, focusText);
-    const result = await runAppServerReview(request.cwd, {
-      target: reviewTarget,
-      model: request.model,
-      onProgress: request.onProgress
-    });
+    const stopHeartbeat = startReviewHeartbeat(request.onProgress);
+    let result;
+    try {
+      result = await runAppServerReview(request.cwd, {
+        target: reviewTarget,
+        model: request.model,
+        onProgress: request.onProgress
+      });
+    } finally {
+      stopHeartbeat();
+    }
     const payload = {
       review: reviewName,
       target,
@@ -986,16 +1045,32 @@ async function runForegroundCommand(job, runner, options = {}) {
   return execution;
 }
 
-function spawnDetachedTaskWorker(cwd, jobId) {
+function spawnDetachedTaskWorker(cwd, jobId, logFile = null) {
   const scriptPath = path.join(ROOT_DIR, "scripts", "codex-companion.mjs");
+  // Route worker stdout/stderr into the job log: a crashing worker's stack
+  // trace is otherwise discarded (stdio "ignore"), which made silent worker
+  // deaths undiagnosable (OBS-B).
+  let stdio = "ignore";
+  let logFd = null;
+  if (logFile) {
+    try {
+      logFd = fs.openSync(logFile, "a");
+      stdio = ["ignore", logFd, logFd];
+    } catch {
+      stdio = "ignore";
+    }
+  }
   const child = spawn(process.execPath, [scriptPath, "task-worker", "--cwd", cwd, "--job-id", jobId], {
     cwd,
     env: process.env,
     detached: true,
-    stdio: "ignore",
+    stdio,
     windowsHide: true
   });
   child.unref();
+  if (logFd != null) {
+    fs.closeSync(logFd);
+  }
   return child;
 }
 
@@ -1003,7 +1078,7 @@ function enqueueBackgroundTask(cwd, job, request) {
   const { logFile } = createTrackedProgress(job);
   appendLogLine(logFile, "Queued for background execution.");
 
-  const child = spawnDetachedTaskWorker(cwd, job.id);
+  const child = spawnDetachedTaskWorker(cwd, job.id, logFile);
   const queuedRecord = {
     ...job,
     status: "queued",
@@ -1207,6 +1282,69 @@ async function handleTransfer(argv) {
   outputCommandResult(payload, rendered, options.json);
 }
 
+/**
+ * Last-gasp instrumentation for detached task workers (OBS-B): a worker that
+ * dies via an uncaught error or premature exit previously left no trace — the
+ * job stayed "running" and the death cause was discarded with its stderr.
+ * These handlers append the failure to the job log and best-effort write a
+ * terminal job state before the process goes down.
+ */
+function registerWorkerLastGasp(workspaceRoot, jobId, getLogFile) {
+  let finalized = false;
+
+  const writeTerminalState = (message) => {
+    if (finalized) {
+      return;
+    }
+    finalized = true;
+    try {
+      appendLogLine(getLogFile(), message);
+    } catch {
+      // The log write must never mask the original failure.
+    }
+    try {
+      const stored = readStoredJob(workspaceRoot, jobId);
+      if (!stored || (stored.status !== "running" && stored.status !== "queued")) {
+        return;
+      }
+      const completedAt = nowIso();
+      const patch = {
+        status: "failed",
+        phase: "failed",
+        pid: null,
+        completedAt,
+        errorMessage: shorten(message, 300)
+      };
+      writeJobFile(workspaceRoot, jobId, { ...stored, ...patch });
+      upsertJob(workspaceRoot, { id: jobId, ...patch });
+    } catch {
+      // Best-effort only; the orphan reaper remains the backstop.
+    }
+  };
+
+  process.on("uncaughtException", (error) => {
+    writeTerminalState(`Worker died on uncaughtException: ${error?.stack ?? error?.message ?? String(error)}`);
+    process.exit(1);
+  });
+  process.on("unhandledRejection", (reason) => {
+    const detail = reason instanceof Error ? reason.stack ?? reason.message : String(reason);
+    writeTerminalState(`Worker died on unhandledRejection: ${detail}`);
+    process.exit(1);
+  });
+  process.on("exit", (code) => {
+    // Synchronous-only path: catches silent exits (empty event loop, explicit
+    // process.exit) that never went through the tracked-job completion write.
+    try {
+      const stored = readStoredJob(workspaceRoot, jobId);
+      if (stored && (stored.status === "running" || stored.status === "queued")) {
+        writeTerminalState(`Worker exited with code ${code} before recording a result (event loop drained or explicit exit).`);
+      }
+    } catch {
+      // Nothing left to do this late in shutdown.
+    }
+  });
+}
+
 async function handleTaskWorker(argv) {
   const { options } = parseCommandInput(argv, {
     valueOptions: ["cwd", "job-id"]
@@ -1222,6 +1360,8 @@ async function handleTaskWorker(argv) {
   if (!storedJob) {
     throw new Error(`No stored job found for ${options["job-id"]}.`);
   }
+  let lastGaspLogFile = storedJob.logFile ?? null;
+  registerWorkerLastGasp(workspaceRoot, options["job-id"], () => lastGaspLogFile);
 
   const request = storedJob.request;
   if (!request || typeof request !== "object") {
@@ -1237,6 +1377,7 @@ async function handleTaskWorker(argv) {
       logFile: storedJob.logFile ?? null
     }
   );
+  lastGaspLogFile = logFile;
   await runTrackedJob(
     {
       ...storedJob,
@@ -1268,12 +1409,21 @@ async function handleStatus(argv) {
   const cwd = resolveCommandCwd(options);
   const reference = positionals[0] ?? "";
   if (reference) {
-    const snapshot = options.wait
-      ? await waitForSingleJobSnapshot(cwd, reference, {
-          timeoutMs: options["timeout-ms"],
-          pollIntervalMs: options["poll-interval-ms"]
-        })
-      : buildSingleJobSnapshot(cwd, reference);
+    let snapshot;
+    if (options.wait) {
+      snapshot = await waitForSingleJobSnapshot(cwd, reference, {
+        timeoutMs: options["timeout-ms"],
+        pollIntervalMs: options["poll-interval-ms"]
+      });
+    } else {
+      snapshot = buildSingleJobSnapshot(cwd, reference);
+      if (isActiveJobStatus(snapshot.job.status)) {
+        const reconciled = await reconcileCompletedTurnJobs(cwd, [snapshot.job]).catch(() => []);
+        if (reconciled.length > 0) {
+          snapshot = buildSingleJobSnapshot(cwd, reference);
+        }
+      }
+    }
     outputCommandResult(snapshot, renderJobStatusReport(snapshot.job), options.json);
     return;
   }

@@ -680,11 +680,88 @@ function applyTurnNotification(state, message) {
   }
 }
 
+const DEFAULT_IDLE_RECONCILE_MS = 60000;
+const IDLE_RECONCILE_ENV = "CODEX_COMPANION_IDLE_RECONCILE_MS";
+const TERMINAL_TURN_STATUSES = new Set(["completed", "failed", "interrupted"]);
+
+function resolveIdleReconcileMs(options = {}) {
+  const fromEnv = Number(process.env[IDLE_RECONCILE_ENV]);
+  if (Number.isFinite(fromEnv) && fromEnv >= 0) {
+    return fromEnv;
+  }
+  const fromOptions = Number(options.idleReconcileMs);
+  if (Number.isFinite(fromOptions) && fromOptions >= 0) {
+    return fromOptions;
+  }
+  return DEFAULT_IDLE_RECONCILE_MS;
+}
+
+function extractTurnStatus(turn) {
+  return typeof turn?.status === "string" ? turn.status : turn?.status?.type ?? null;
+}
+
+/**
+ * Reconciliation fallback for an alive-but-starved worker: if no notification
+ * arrives for `idleMs`, poll the thread's latest turn. When it is terminal,
+ * synthesize the completion (result = its last agentMessage) instead of
+ * waiting forever on an event stream that silently dropped the turn/completed
+ * (observed in the field: job hung for an hour while the turn had finished).
+ */
+function startIdleReconciler(client, state, idleMs, getLastEventAt) {
+  if (!idleMs) {
+    return null;
+  }
+  let inFlight = false;
+  const timer = setInterval(async () => {
+    if (state.completed || inFlight || Date.now() - getLastEventAt() < idleMs) {
+      return;
+    }
+    inFlight = true;
+    try {
+      const response = await client.request("thread/turns/list", {
+        threadId: state.threadId,
+        cursor: null,
+        limit: 1,
+        sortDirection: "desc",
+        itemsView: "full"
+      });
+      if (state.completed) {
+        return;
+      }
+      const latest = response?.data?.[0] ?? null;
+      const status = extractTurnStatus(latest);
+      if (!latest || !TERMINAL_TURN_STATUSES.has(status)) {
+        return;
+      }
+      const lastAgent = [...(latest.items ?? [])].reverse().find((item) => item?.type === "agentMessage" && item.text);
+      if (lastAgent) {
+        state.lastAgentMessage = lastAgent.text;
+        state.messages.push({ lifecycle: "completed", phase: lastAgent.phase ?? null, text: lastAgent.text });
+      }
+      emitProgress(
+        state.onProgress,
+        `Turn completion reconciled from thread state: no events for ${Math.round((Date.now() - getLastEventAt()) / 1000)}s while the latest turn (${latest.id}) is ${status}.`,
+        "finalizing"
+      );
+      completeTurn(state, { id: latest.id, status });
+    } catch {
+      // Broker busy, unsupported method, or transient failure: retry next tick.
+    } finally {
+      inFlight = false;
+    }
+  }, Math.max(250, Math.min(idleMs, 20000)));
+  timer.unref?.();
+  return timer;
+}
+
 async function captureTurn(client, threadId, startRequest, options = {}) {
   const state = createTurnCaptureState(threadId, options);
   const previousHandler = client.notificationHandler;
+  let lastEventAt = Date.now();
+  const idleReconciler = startIdleReconciler(client, state, resolveIdleReconcileMs(options), () => lastEventAt);
 
   client.setNotificationHandler((message) => {
+    lastEventAt = Date.now();
     if (shouldBypassTurnCapture(message)) {
       if (previousHandler) {
         previousHandler(message);
@@ -767,6 +844,9 @@ async function captureTurn(client, threadId, startRequest, options = {}) {
 
     return await state.completion;
   } finally {
+    if (idleReconciler) {
+      clearInterval(idleReconciler);
+    }
     clearCompletionTimer(state);
     client.setNotificationHandler(previousHandler ?? null);
   }

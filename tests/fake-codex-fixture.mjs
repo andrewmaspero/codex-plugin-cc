@@ -273,6 +273,7 @@ if (args[0] !== "app-server") {
 }
 const bootState = loadState();
 bootState.appServerStarts = (bootState.appServerStarts || 0) + 1;
+bootState.lastAppServerArgs = args.slice(1);
 saveState(bootState);
 
 const rl = readline.createInterface({ input: process.stdin });
@@ -499,6 +500,14 @@ rl.on("line", (line) => {
           ]
         });
         saveState(state);
+
+        if (BEHAVIOR === "no-turn-events") {
+          // Model an event stream that silently drops every notification for
+          // the turn: the turn is recorded as completed in thread state (so
+          // thread/turns/list sees it) but the client never receives
+          // turn/started, item, or turn/completed events.
+          break;
+        }
 
         if (
           BEHAVIOR === "with-subagent" ||

@@ -280,6 +280,36 @@ function findJobInStateDir(stateDir, jobId) {
   }
 }
 
+/**
+ * Scan every workspace state dir for still-active jobs tracking `threadId`.
+ * Used by the codex notify hook, which only knows the thread id: the payload
+ * cwd may be a worktree whose state lives under the original workspace.
+ */
+export function listActiveJobsByThreadId(threadId) {
+  if (!threadId) {
+    return [];
+  }
+  const matches = [];
+  for (const stateDir of listStateDirs()) {
+    const stateFile = path.join(stateDir, STATE_FILE_NAME);
+    if (!fs.existsSync(stateFile)) {
+      continue;
+    }
+    let jobs;
+    try {
+      jobs = JSON.parse(fs.readFileSync(stateFile, "utf8")).jobs ?? [];
+    } catch {
+      continue;
+    }
+    for (const job of jobs) {
+      if (job.threadId === threadId && (job.status === "running" || job.status === "queued")) {
+        matches.push({ stateDir, job });
+      }
+    }
+  }
+  return matches;
+}
+
 export function resolveJobFileGlobally(cwd, jobId) {
   const current = findJobInStateDir(resolveStateDir(cwd), jobId);
   if (current) {
