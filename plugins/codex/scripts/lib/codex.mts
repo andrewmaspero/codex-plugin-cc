@@ -957,6 +957,13 @@ async function captureTurn(
         if (previousHandler) {
           previousHandler(message);
         }
+      } else if (message.method === "thread/started" || message.method === "thread/name/updated") {
+        // Same special case as the live handler path: subagent thread
+        // announcements (names) can arrive before the turn/start response
+        // resolves, and dropping them here loses subagent labels for the
+        // whole turn ("Subagent thr_2" instead of its name — deterministic
+        // on slow CI runners, rare on fast machines).
+        applyTurnNotification(state, message);
       } else if (isRootTurnStarted(state, message)) {
         captureRootTurnStarted(state, message);
         applyTurnNotification(state, message);

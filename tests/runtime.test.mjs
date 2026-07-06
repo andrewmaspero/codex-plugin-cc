@@ -809,7 +809,7 @@ test("task logs reasoning summaries and assistant messages to the job log", () =
 });
 
 // Same timing-flaky family as the parallel-broker test on low-core CI runners.
-test("task logs subagent reasoning and messages with a subagent prefix", { retry: 2 }, () => {
+test("task logs subagent reasoning and messages with a subagent prefix", () => {
   const repo = makeTempDir();
   const binDir = makeTempDir();
   installFakeCodex(binDir, "with-subagent");
