@@ -94,6 +94,7 @@ import {
   runTrackedJob,
   SESSION_ID_ENV
 } from "./lib/tracked-jobs.mts";
+import { writeJobVisibilityMarker } from "./lib/native-visibility.mts";
 import { resolveWorkspaceRoot } from "./lib/workspace.mts";
 import {
   renderNativeReviewResult,
@@ -185,7 +186,7 @@ function printUsage() {
   console.log(
     [
       "Usage:",
-      "  node scripts/codex-companion.mts setup [--enable-review-gate|--disable-review-gate] [--sandbox <read-only|write|full|clear>] [--json]",
+      "  node scripts/codex-companion.mts setup [--enable-review-gate|--disable-review-gate] [--sandbox <read-only|write|full|clear>] [--statusline] [--json]",
       "  node scripts/codex-companion.mts review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>]",
       "  node scripts/codex-companion.mts adversarial-review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [focus text]",
       "  node scripts/codex-companion.mts task [--background] [--write|--full|--sandbox <mode>] [--worktree|--worktree-name <name>] [--goal <objective>] [--goal-budget <tokens>] [--resume-last|--resume|--fresh] [--model <model|spark>] [--effort <none|minimal|low|medium|high|xhigh>] [prompt]",
@@ -402,7 +403,21 @@ function firstMeaningfulLine(text, fallback) {
   return line ?? fallback;
 }
 
-async function buildSetupReport(cwd, actionsTaken = []) {
+function buildStatuslineSettingsSnippet() {
+  return JSON.stringify(
+    {
+      statusLine: {
+        type: "command",
+        command: 'node "${CLAUDE_PLUGIN_ROOT}/scripts/statusline.mts"',
+        padding: 0
+      }
+    },
+    null,
+    2
+  );
+}
+
+async function buildSetupReport(cwd, actionsTaken = [], options: { statusline?: boolean } = {}) {
   const workspaceRoot = resolveWorkspaceRoot(cwd);
   const nodeStatus = getNodeRuntimeStatus();
   const npmStatus = binaryAvailable("npm", ["--version"], { cwd });
@@ -435,14 +450,15 @@ async function buildSetupReport(cwd, actionsTaken = []) {
     reviewGateEnabled: Boolean(config.stopReviewGate),
     defaultSandbox: normalizeSandboxMode(config.defaultSandbox) ?? "read-only",
     actionsTaken,
-    nextSteps
+    nextSteps,
+    statuslineSnippet: options.statusline ? buildStatuslineSettingsSnippet() : null
   };
 }
 
 async function handleSetup(argv) {
   const { options } = parseCommandInput(argv, {
     valueOptions: ["cwd", "sandbox"],
-    booleanOptions: ["json", "enable-review-gate", "disable-review-gate"]
+    booleanOptions: ["json", "enable-review-gate", "disable-review-gate", "statusline"]
   });
 
   if (options["enable-review-gate"] && options["disable-review-gate"]) {
@@ -473,7 +489,7 @@ async function handleSetup(argv) {
     }
   }
 
-  const finalReport = await buildSetupReport(cwd, actionsTaken);
+  const finalReport = await buildSetupReport(cwd, actionsTaken, { statusline: Boolean(options.statusline) });
   outputResult(options.json ? finalReport : renderSetupReport(finalReport), options.json);
 }
 
@@ -1464,6 +1480,7 @@ function registerWorkerLastGasp(workspaceRoot, jobId, getLogFile) {
       };
       writeJobFile(workspaceRoot, jobId, { ...stored, ...patch });
       upsertJob(workspaceRoot, { id: jobId, ...patch });
+      writeJobVisibilityMarker(workspaceRoot, stored as JobRecord, "failed", message);
     } catch {
       // Best-effort only; the orphan reaper remains the backstop.
     }
@@ -1730,6 +1747,7 @@ async function handleCancel(argv) {
     errorMessage: "Cancelled by user.",
     completedAt
   });
+  writeJobVisibilityMarker(workspaceRoot, { ...job, ...existing }, "cancelled", "Cancelled by user.");
 
   const payload = {
     jobId: job.id,

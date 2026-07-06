@@ -3,6 +3,7 @@ import process from "node:process";
 
 import { readJobFile, resolveJobFile, resolveJobLogFile, upsertJob, writeJobFile } from "./state.mts";
 import type { JobPatch, JobRecord } from "./state.mts";
+import { buildLastActivity, oneLineSummary, writeJobVisibilityMarker } from "./native-visibility.mts";
 
 export const SESSION_ID_ENV = "CODEX_COMPANION_SESSION_ID";
 
@@ -114,6 +115,16 @@ export function createJobProgressUpdater(workspaceRoot, jobId) {
       changed = true;
     }
 
+    const assistantCapsule =
+      normalized.logTitle === "Assistant message" || /^Subagent .+ message$/.test(normalized.logTitle ?? "");
+    const lastActivity = assistantCapsule
+      ? buildLastActivity({ message: normalized.logBody ?? normalized.message, phase: normalized.phase })
+      : null;
+    if (lastActivity) {
+      patch.lastActivity = lastActivity;
+      changed = true;
+    }
+
     if (!changed) {
       return;
     }
@@ -174,8 +185,16 @@ export async function runTrackedJob(job: JobRecord, runner: () => Promise<Tracke
     const execution = await runner();
     const completionStatus = execution.exitStatus === 0 ? "completed" : "failed";
     const completedAt = nowIso();
+    const terminalSummary = oneLineSummary(
+      execution.summary ?? execution.rendered ?? (execution.payload as { rawOutput?: unknown } | null)?.rawOutput,
+      `${job.title ?? "Codex job"} ${completionStatus}`
+    );
+    // Spread the CURRENT stored record, not the job-start snapshot: mid-turn
+    // patches (lastActivity capsules, threadId updates) must survive the
+    // terminal write. The catch path below already does this.
+    const currentRecord = readStoredJobOrNull(job.workspaceRoot, job.id) ?? runningRecord;
     writeJobFile(job.workspaceRoot, job.id, {
-      ...runningRecord,
+      ...currentRecord,
       status: completionStatus,
       threadId: execution.threadId ?? null,
       turnId: execution.turnId ?? null,
@@ -183,18 +202,20 @@ export async function runTrackedJob(job: JobRecord, runner: () => Promise<Tracke
       phase: completionStatus === "completed" ? "done" : "failed",
       completedAt,
       result: execution.payload,
-      rendered: execution.rendered
+      rendered: execution.rendered,
+      summary: terminalSummary
     });
     upsertJob(job.workspaceRoot, {
       id: job.id,
       status: completionStatus,
       threadId: execution.threadId ?? null,
       turnId: execution.turnId ?? null,
-      summary: execution.summary,
+      summary: terminalSummary,
       phase: completionStatus === "completed" ? "done" : "failed",
       pid: null,
       completedAt
     });
+    writeJobVisibilityMarker(job.workspaceRoot, { ...job, ...runningRecord }, completionStatus, terminalSummary);
     appendLogBlock(options.logFile ?? job.logFile ?? null, "Final output", execution.rendered);
     return execution;
   } catch (error) {
@@ -218,6 +239,7 @@ export async function runTrackedJob(job: JobRecord, runner: () => Promise<Tracke
       errorMessage,
       completedAt
     });
+    writeJobVisibilityMarker(job.workspaceRoot, { ...job, ...existing }, "failed", errorMessage);
     throw error;
   }
 }

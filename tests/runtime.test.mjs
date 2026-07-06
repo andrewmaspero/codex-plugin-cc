@@ -1168,7 +1168,7 @@ test("status shows phases, hints, and the latest finished job", () => {
 
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /Active jobs:/);
-  assert.match(result.stdout, /\| Job \| Kind \| Status \| Phase \| Elapsed \| Codex Session ID \| Summary \| Actions \|/);
+  assert.match(result.stdout, /\| Job \| Kind \| Status \| Phase \| Elapsed \| Activity \| Codex Session ID \| Summary \| Actions \|/);
   assert.match(result.stdout, /\| review-live \| review \| running \| reviewing \| .* \| thr_1 \| Review working tree diff \|/);
   assert.match(result.stdout, /`\/codex:status review-live`<br>`\/codex:cancel review-live`/);
   assert.match(result.stdout, /Live details:/);

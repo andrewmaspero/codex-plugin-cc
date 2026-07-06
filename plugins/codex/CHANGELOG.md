@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.6.0 (fork)
+
+Native Claude Code visibility.
+
+- Added hook-driven wake markers for terminal Codex jobs and reconciliation
+  fallbacks. Stop and SessionStart hooks consume session-scoped markers and
+  inject one-line `additionalContext` wake-ups.
+- Added `lastActivity` summary pockets, updated from captured assistant
+  progress, and surfaced them in `/codex:status` table and single-job output.
+- Added opt-in `scripts/statusline.mts` plus `/codex:setup --statusline`
+  instructions for a local-only Claude Code statusline.
+- Added unit coverage for marker consume-once behavior and statusline output,
+  plus an integration fixture for `lastActivity` capture.
+
 ## 1.5.1 (fork)
 
 Test runner migration.

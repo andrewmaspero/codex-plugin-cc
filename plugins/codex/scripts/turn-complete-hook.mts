@@ -21,6 +21,7 @@ import process from "node:process";
 import { listActiveJobsByThreadId, readJobFile, resolveJobFile, updateState, writeJobFile } from "./lib/state.mts";
 import type { JobFilePayload } from "./lib/state.mts";
 import { appendLogLine, nowIso } from "./lib/tracked-jobs.mts";
+import { buildLastActivity, oneLineSummary, writeJobVisibilityMarker } from "./lib/native-visibility.mts";
 
 const GRACE_MS = Math.max(0, Number(process.env.CODEX_COMPANION_HOOK_GRACE_MS) || 8000);
 const POLL_MS = Math.min(1000, Math.max(50, GRACE_MS || 50));
@@ -64,6 +65,7 @@ function finalizeJob(match, payload) {
   }
   const lastMessage = typeof payload["last-assistant-message"] === "string" ? payload["last-assistant-message"] : "";
   const completedAt = nowIso();
+  const summary = oneLineSummary(lastMessage, `${match.job.title ?? "Codex job"} completed`);
   const note = `Turn completion recorded by the Codex notify hook (turn ${payload["turn-id"] ?? "?"}); the worker did not finalize this job itself.`;
   const patch = {
     status: "completed",
@@ -71,7 +73,8 @@ function finalizeJob(match, payload) {
     pid: null,
     completedAt,
     turnId: match.job.turnId ?? payload["turn-id"] ?? null,
-    reconciledBy: "codex-notify-hook"
+    reconciledBy: "codex-notify-hook",
+    lastActivity: buildLastActivity({ message: lastMessage, phase: "done" }, completedAt) ?? match.job.lastActivity
   };
 
   let finalized = false;
@@ -87,7 +90,7 @@ function finalizeJob(match, payload) {
     state.jobs[index] = {
       ...current,
       ...patch,
-      summary: lastMessage ? lastMessage.split(/\r?\n/).find(Boolean) ?? current.summary : current.summary,
+      summary,
       updatedAt: completedAt
     };
     finalized = true;
@@ -115,6 +118,7 @@ function finalizeJob(match, payload) {
     },
     rendered: stored.rendered ?? (lastMessage || note)
   });
+  writeJobVisibilityMarker(workspaceRoot, { ...match.job, sessionId: match.job.sessionId ?? null }, "completed", summary);
   appendLogLine(match.job.logFile, note);
   return true;
 }

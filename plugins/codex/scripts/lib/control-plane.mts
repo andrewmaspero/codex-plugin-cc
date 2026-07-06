@@ -18,6 +18,7 @@ import type { JobFilePayload, JobRecord } from "./state.mts";
 import { enrichJob, reapOrphanedJobs, sortJobsNewestFirst } from "./job-control.mts";
 import { isProcessAlive } from "./process.mts";
 import { appendLogLine, SESSION_ID_ENV } from "./tracked-jobs.mts";
+import { buildLastActivity, oneLineSummary, writeJobVisibilityMarker } from "./native-visibility.mts";
 import { resolveWorkspaceRoot } from "./workspace.mts";
 
 export const STEER_SOFT_WORD_LIMIT = 300;
@@ -878,6 +879,10 @@ function extractTurnStatusValue(turn) {
 function finalizeReconciledJob(workspaceRoot, job, latestTurn, status, lastAgentText) {
   const completedAt = new Date().toISOString();
   const jobStatus = status === "completed" ? "completed" : "failed";
+  const summary = oneLineSummary(
+    lastAgentText,
+    jobStatus === "completed" ? `${job.title ?? "Codex job"} completed` : `${job.title ?? "Codex job"} failed`
+  );
   const note = `Job finalized by read-side reconciliation: the thread's latest turn (${latestTurn.id}) is ${status} but the worker never recorded a result.`;
   const patch = {
     status: jobStatus,
@@ -885,6 +890,11 @@ function finalizeReconciledJob(workspaceRoot, job, latestTurn, status, lastAgent
     pid: null,
     completedAt,
     reconciledBy: "read-reconciler",
+    summary,
+    lastActivity: buildLastActivity(
+      { message: lastAgentText ?? note, phase: jobStatus === "completed" ? "done" : "failed" },
+      completedAt
+    ),
     ...(jobStatus === "failed" ? { errorMessage: note } : {})
   };
 
@@ -924,6 +934,7 @@ function finalizeReconciledJob(workspaceRoot, job, latestTurn, status, lastAgent
     },
     rendered: stored.rendered ?? (lastAgentText || note)
   });
+  writeJobVisibilityMarker(workspaceRoot, job, jobStatus, summary);
   appendLogLine(job.logFile, note);
   return true;
 }

@@ -207,6 +207,7 @@ Examples:
 Use it to:
 
 - check progress on background work
+- see the latest activity pocket captured from assistant progress
 - see the latest completed job
 - confirm whether a task is still running
 
@@ -251,6 +252,30 @@ When the review gate is enabled, the plugin uses a `Stop` hook to run a targeted
 
 > [!WARNING]
 > The review gate can create a long-running Claude/Codex loop and may drain usage limits quickly. Only enable it when you plan to actively monitor the session.
+
+#### Native visibility
+
+Background Codex jobs write compact wake markers when they finish or are reconciled by a hook/reaper. The plugin's `Stop` and `SessionStart` hooks consume those markers once and inject lines like `Codex job task-abc completed: fixed the failing test` as Claude Code additional context for the same Claude session.
+
+`/codex:status` also shows a latest activity pocket for each job, based on the newest captured assistant progress message.
+
+For an ambient local statusline, run:
+
+```bash
+/codex:setup --statusline
+```
+
+Add the printed snippet to Claude Code `settings.json`:
+
+```json
+{
+  "statusLine": {
+    "type": "command",
+    "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/statusline.mts\"",
+    "padding": 0
+  }
+}
+```
 
 ## Typical Flows
 

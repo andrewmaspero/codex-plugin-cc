@@ -5,6 +5,7 @@ import { isProcessAlive } from "./process.mts";
 import { getConfig, listJobs, readJobFile, resolveJobFile, resolveJobFileGlobally, updateState, writeJobFile } from "./state.mts";
 import type { JobRecord } from "./state.mts";
 import { appendLogLine, SESSION_ID_ENV } from "./tracked-jobs.mts";
+import { writeJobVisibilityMarker } from "./native-visibility.mts";
 import { resolveWorkspaceRoot } from "./workspace.mts";
 
 export const DEFAULT_MAX_STATUS_JOBS = 8;
@@ -287,6 +288,7 @@ export function reapOrphanedJobs(workspaceRoot: string, jobs: JobRecord[], optio
     if (stored) {
       writeJobFile(workspaceRoot, job.id, { ...stored, ...patch });
     }
+    writeJobVisibilityMarker(workspaceRoot, job, "failed", patch.errorMessage);
     appendLogLine(job.logFile, orphanMessage(job.pid));
   }
 

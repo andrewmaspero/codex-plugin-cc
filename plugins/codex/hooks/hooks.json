@@ -1,5 +1,5 @@
 {
-  "description": "Optional stop-time review gate for Codex Companion.",
+  "description": "Codex Companion session lifecycle, visibility wake-ups, and optional stop-time review gate.",
   "hooks": {
     "SessionStart": [
       {

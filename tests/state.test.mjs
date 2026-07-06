@@ -4,8 +4,17 @@ import path from "node:path";
 import { test } from "vitest";
 import assert from "node:assert/strict";
 
-import { makeTempDir } from "./helpers.mjs";
-import { resolveJobFile, resolveJobLogFile, resolveStateDir, resolveStateFile, saveState } from "../plugins/codex/scripts/lib/state.mts";
+import { makeTempDir, run } from "./helpers.mjs";
+import { fileURLToPath } from "node:url";
+import { resolveJobFile, resolveJobLogFile, resolveStateDir, resolveStateFile, saveState, upsertJob, writeJobFile } from "../plugins/codex/scripts/lib/state.mts";
+import {
+  consumeVisibilityMarkers,
+  renderVisibilityAdditionalContext,
+  writeVisibilityMarker
+} from "../plugins/codex/scripts/lib/native-visibility.mts";
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const STATUSLINE = path.join(ROOT, "plugins", "codex", "scripts", "statusline.mts");
 
 test("resolveStateDir uses a temp-backed per-workspace directory", () => {
   const workspace = makeTempDir();
@@ -116,4 +125,65 @@ test("saveState prunes dropped job artifacts when indexed jobs exceed the cap", 
       .flatMap((jobId) => [`${jobId}.json`, `${jobId}.log`])
       .sort()
   );
+});
+
+test("visibility markers are session-scoped and consumed once", () => {
+  const workspace = makeTempDir();
+  writeVisibilityMarker(workspace, {
+    jobId: "task-visible",
+    status: "completed",
+    summary: "Implemented the native visibility path with tests.",
+    timestamp: "2026-07-07T00:00:00.000Z",
+    sessionId: "session-a"
+  });
+  writeVisibilityMarker(workspace, {
+    jobId: "task-other",
+    status: "failed",
+    summary: "Other session failed.",
+    timestamp: "2026-07-07T00:01:00.000Z",
+    sessionId: "session-b"
+  });
+
+  const skipped = consumeVisibilityMarkers(workspace, { sessionId: "session-c" });
+  assert.deepEqual(skipped, []);
+
+  const consumed = consumeVisibilityMarkers(workspace, { sessionId: "session-a" });
+  assert.equal(consumed.length, 1);
+  assert.equal(consumed[0].jobId, "task-visible");
+  assert.equal(
+    renderVisibilityAdditionalContext(consumed),
+    "Codex job task-visible completed: Implemented the native visibility path with tests."
+  );
+
+  assert.deepEqual(consumeVisibilityMarkers(workspace, { sessionId: "session-a" }), []);
+
+  const explicit = consumeVisibilityMarkers(workspace, { jobId: "task-other" });
+  assert.equal(explicit.length, 1);
+  assert.equal(explicit[0].sessionId, "session-b");
+});
+
+test("statusline renders active jobs from local state only", () => {
+  const workspace = makeTempDir();
+  const job = {
+    id: "task-statusline",
+    status: "running",
+    phase: "typing",
+    workspaceRoot: workspace,
+    createdAt: "2026-07-07T00:00:00.000Z",
+    startedAt: new Date(Date.now() - 12 * 60 * 1000).toISOString(),
+    updatedAt: new Date().toISOString(),
+    lastActivity: {
+      text: "typing broker options",
+      phase: "typing",
+      timestamp: new Date().toISOString()
+    }
+  };
+  upsertJob(workspace, job);
+  writeJobFile(workspace, job.id, job);
+
+  const result = run("node", [STATUSLINE, "--cwd", workspace], { cwd: workspace });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /^codex: 1 running \| task-statusline /);
+  assert.match(result.stdout, /'typing broker options'/);
 });

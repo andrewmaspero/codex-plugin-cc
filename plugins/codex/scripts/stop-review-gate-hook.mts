@@ -12,6 +12,7 @@ import { getConfig, listJobs } from "./lib/state.mts";
 import type { JobRecord } from "./lib/state.mts";
 import { sortJobsNewestFirst } from "./lib/job-control.mts";
 import { SESSION_ID_ENV } from "./lib/tracked-jobs.mts";
+import { consumeVisibilityMarkers, renderVisibilityAdditionalContext } from "./lib/native-visibility.mts";
 import { resolveWorkspaceRoot } from "./lib/workspace.mts";
 
 const STOP_REVIEW_TIMEOUT_MS = 15 * 60 * 1000;
@@ -33,8 +34,27 @@ function readHookInput() {
   return JSON.parse(raw);
 }
 
-function emitDecision(payload) {
-  process.stdout.write(`${JSON.stringify(payload)}\n`);
+function withAdditionalContext(payload, context) {
+  if (!context) {
+    return payload;
+  }
+  return {
+    ...payload,
+    hookSpecificOutput: {
+      hookEventName: "Stop",
+      additionalContext: context
+    }
+  };
+}
+
+function emitDecision(payload, context = "") {
+  process.stdout.write(`${JSON.stringify(withAdditionalContext(payload, context))}\n`);
+}
+
+function emitContextIfAny(context) {
+  if (context) {
+    emitDecision({}, context);
+  }
 }
 
 function logNote(message) {
@@ -151,6 +171,9 @@ function main() {
   const cwd = input.cwd || process.env.CLAUDE_PROJECT_DIR || process.cwd();
   const workspaceRoot = resolveWorkspaceRoot(cwd);
   const config = getConfig(workspaceRoot);
+  const additionalContext = renderVisibilityAdditionalContext(
+    consumeVisibilityMarkers(workspaceRoot, { sessionId: input.session_id || process.env[SESSION_ID_ENV] || null })
+  );
 
   const jobs = sortJobsNewestFirst(filterJobsForCurrentSession(listJobs(workspaceRoot), input));
   const runningJob = jobs.find((job) => job.status === "queued" || job.status === "running");
@@ -160,6 +183,7 @@ function main() {
 
   if (!config.stopReviewGate) {
     logNote(runningTaskNote);
+    emitContextIfAny(additionalContext);
     return;
   }
 
@@ -167,6 +191,7 @@ function main() {
   if (setupNote) {
     logNote(setupNote);
     logNote(runningTaskNote);
+    emitContextIfAny(additionalContext);
     return;
   }
 
@@ -175,11 +200,12 @@ function main() {
     emitDecision({
       decision: "block",
       reason: runningTaskNote ? `${runningTaskNote} ${review.reason}` : review.reason
-    });
+    }, additionalContext);
     return;
   }
 
   logNote(runningTaskNote);
+  emitContextIfAny(additionalContext);
 }
 
 try {

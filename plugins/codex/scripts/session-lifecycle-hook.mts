@@ -14,6 +14,7 @@ import {
   teardownBrokerSession
 } from "./lib/broker-lifecycle.mts";
 import { loadState, resolveStateFile, updateState } from "./lib/state.mts";
+import { consumeVisibilityMarkers, renderVisibilityAdditionalContext } from "./lib/native-visibility.mts";
 import { TRANSCRIPT_PATH_ENV } from "./lib/claude-session-transfer.mts";
 import { resolveWorkspaceRoot } from "./lib/workspace.mts";
 
@@ -37,6 +38,20 @@ function appendEnvVar(name, value) {
     return;
   }
   fs.appendFileSync(process.env.CLAUDE_ENV_FILE, `export ${name}=${shellEscape(value)}\n`, "utf8");
+}
+
+function emitAdditionalContext(eventName, context) {
+  if (!context) {
+    return;
+  }
+  process.stdout.write(
+    `${JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: eventName,
+        additionalContext: context
+      }
+    })}\n`
+  );
 }
 
 async function cleanupSessionJobs(cwd, sessionId) {
@@ -90,6 +105,11 @@ function handleSessionStart(input) {
   appendEnvVar(SESSION_ID_ENV, input.session_id);
   appendEnvVar(TRANSCRIPT_PATH_ENV, input.transcript_path);
   appendEnvVar(PLUGIN_DATA_ENV, process.env[PLUGIN_DATA_ENV]);
+  const cwd = input.cwd || process.env.CLAUDE_PROJECT_DIR || process.cwd();
+  const context = renderVisibilityAdditionalContext(
+    consumeVisibilityMarkers(cwd, { sessionId: input.session_id || process.env[SESSION_ID_ENV] || null })
+  );
+  emitAdditionalContext("SessionStart", context);
 }
 
 async function handleSessionEnd(input) {

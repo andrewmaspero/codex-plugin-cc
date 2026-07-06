@@ -106,17 +106,24 @@ function formatCodexResumeCommand(job) {
   return `codex resume ${job.threadId}`;
 }
 
+function formatActivityPocket(job) {
+  if (!job.lastActivity?.text) {
+    return "";
+  }
+  return job.lastActivity.phase ? `${job.lastActivity.phase}: ${job.lastActivity.text}` : job.lastActivity.text;
+}
+
 function appendActiveJobsTable(lines, jobs) {
   lines.push("Active jobs:");
-  lines.push("| Job | Kind | Status | Phase | Elapsed | Codex Session ID | Summary | Actions |");
-  lines.push("| --- | --- | --- | --- | --- | --- | --- | --- |");
+  lines.push("| Job | Kind | Status | Phase | Elapsed | Activity | Codex Session ID | Summary | Actions |");
+  lines.push("| --- | --- | --- | --- | --- | --- | --- | --- | --- |");
   for (const job of jobs) {
     const actions = [`/codex:status ${job.id}`];
     if (job.status === "queued" || job.status === "running") {
       actions.push(`/codex:cancel ${job.id}`);
     }
     lines.push(
-      `| ${escapeMarkdownCell(job.id)} | ${escapeMarkdownCell(job.kindLabel)} | ${escapeMarkdownCell(job.status)} | ${escapeMarkdownCell(job.phase ?? "")} | ${escapeMarkdownCell(job.elapsed ?? "")} | ${escapeMarkdownCell(job.threadId ?? "")} | ${escapeMarkdownCell(job.summary ?? "")} | ${actions.map((action) => `\`${action}\``).join("<br>")} |`
+      `| ${escapeMarkdownCell(job.id)} | ${escapeMarkdownCell(job.kindLabel)} | ${escapeMarkdownCell(job.status)} | ${escapeMarkdownCell(job.phase ?? "")} | ${escapeMarkdownCell(job.elapsed ?? "")} | ${escapeMarkdownCell(formatActivityPocket(job))} | ${escapeMarkdownCell(job.threadId ?? "")} | ${escapeMarkdownCell(job.summary ?? "")} | ${actions.map((action) => `\`${action}\``).join("<br>")} |`
     );
   }
 }
@@ -137,6 +144,12 @@ function pushJobDetails(lines, job, options: JobDetailsRenderOptions = {}) {
   }
   if (job.phase) {
     lines.push(`  Phase: ${job.phase}`);
+  }
+  if (job.lastActivity?.text) {
+    lines.push(`  Last activity: ${formatActivityPocket(job)}`);
+    if (job.lastActivity.timestamp) {
+      lines.push(`  Last activity at: ${job.lastActivity.timestamp}`);
+    }
   }
   if (options.showElapsed && job.elapsed) {
     lines.push(`  Elapsed: ${job.elapsed}`);
@@ -213,6 +226,10 @@ export function renderSetupReport(report) {
     for (const step of report.nextSteps) {
       lines.push(`- ${step}`);
     }
+  }
+
+  if (report.statuslineSnippet) {
+    lines.push("", "Statusline settings.json snippet:", "", "```json", report.statuslineSnippet, "```");
   }
 
   return `${lines.join("\n").trimEnd()}\n`;

@@ -1,6 +1,6 @@
 ---
-description: Check whether the local Codex CLI is ready, toggle the stop-time review gate, and set the default sandbox trust level
-argument-hint: '[--enable-review-gate|--disable-review-gate] [--sandbox <read-only|write|full|clear>]'
+description: Check whether the local Codex CLI is ready, toggle the stop-time review gate, set sandbox trust, and print statusline setup
+argument-hint: '[--enable-review-gate|--disable-review-gate] [--sandbox <read-only|write|full|clear>] [--statusline]'
 allowed-tools: Bash(node:*), Bash(npm:*), AskUserQuestion
 ---
 
@@ -35,6 +35,10 @@ Sandbox trust level:
 - `--sandbox full` (alias `danger-full-access`) makes every rescue/continue job in this workspace run with full permissions and no sandbox. Use it when the user says they trust Codex and do not want sandboxing.
 - `--sandbox write` defaults jobs to workspace-write; `--sandbox read-only` or `--sandbox clear` restores the conservative default.
 - Per-call flags (`--full`, `--write`, `--sandbox <mode>`) still override the workspace default.
+
+Statusline:
+- `--statusline` prints the exact Claude Code `settings.json` snippet for the opt-in Codex statusline.
+- Do not edit the user's settings directly.
 
 Output rules:
 - Present the final setup output to the user.
