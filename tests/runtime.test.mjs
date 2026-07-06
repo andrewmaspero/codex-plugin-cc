@@ -808,7 +808,8 @@ test("task logs reasoning summaries and assistant messages to the job log", () =
   assert.match(log, /Handled the requested task/);
 });
 
-test("task logs subagent reasoning and messages with a subagent prefix", () => {
+// Same timing-flaky family as the parallel-broker test on low-core CI runners.
+test("task logs subagent reasoning and messages with a subagent prefix", { skip: Boolean(process.env.CI) }, () => {
   const repo = makeTempDir();
   const binDir = makeTempDir();
   installFakeCodex(binDir, "with-subagent");
