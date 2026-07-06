@@ -5,13 +5,13 @@
   },
   "metadata": {
     "description": "Fork of openai/codex-plugin-cc with a Fable control-plane: turn steering, token-efficient thread viewers, drift alerts, and explicit thread continuation.",
-    "version": "1.4.1"
+    "version": "1.4.2"
   },
   "plugins": [
     {
       "name": "codex",
       "description": "Use Codex from Claude Code to review code or delegate tasks, with steer/threads/turns/items/tail/alerts/continue control-plane commands.",
-      "version": "1.4.1",
+      "version": "1.4.2",
       "author": {
         "name": "Andrew Maspero (fork of OpenAI codex-plugin-cc)"
       },

@@ -1,5 +1,45 @@
 # Changelog
 
+## 1.4.2 (fork)
+
+Silent job-death elimination: streaming, reconciliation, and instrumentation.
+
+- Fixed continue jobs streaming zero progress events (log frozen at "Thread
+  ready" while the turn ran invisibly). Root cause: goal-bearing threads start
+  a server-initiated goal-continuation turn the moment a user turn completes;
+  a continue landing during it has its input absorbed into that turn, and the
+  broker released stream ownership on the wrong turn's completion. The broker
+  now releases on turn-id match, and `captureTurn` adopts the live root turn
+  (with a grace window that re-latches if the prompt was requeued as its own
+  turn instead). Verified against the real codex-cli 0.140.0 both ways.
+- Durable turn-completion finalization, three independent layers:
+  - every plugin-spawned `codex app-server` is configured with
+    `-c notify=[node, turn-complete-hook.mjs]`; codex itself invokes the hook
+    when a turn finishes and the hook finalizes any job for that thread whose
+    worker died or hung (grace-window + log-activity guarded);
+  - workers poll `thread/turns/list` after 60s of event silence and
+    synthesize the completion if the latest turn is terminal;
+  - `status --wait`, `wait`, single-job `status`, and `alerts` finalize
+    running jobs whose thread shows a terminal latest turn, surfaced as the
+    new `completed-but-unreconciled` alert kind (distinct from `stalled`).
+- Root-caused the silent worker deaths (OBS-B): a broker killed mid-turn (a
+  concurrent session's SessionEnd, or broker replacement) closed the worker's
+  socket, its completion promise never settled, and the drained event loop
+  exited 0 with no trace. `captureTurn` now fails loudly when the runtime
+  connection dies; workers also install uncaughtException/unhandledRejection/
+  exit last-gasp handlers and route stdout/stderr into the job log.
+- Native reviews log a synthesized 60s heartbeat (they emit no incremental
+  events) and `alerts` treats silent native reviews as missed heartbeats with
+  a tighter threshold.
+- Unknown flags are rejected on every subcommand (a typo like `--promt-stdin`
+  previously became prompt text silently); prose starting with a dash still
+  works after a bare `--` separator.
+- New `worktrees [--prune]` subcommand lists plugin worktrees under
+  `~/.codex/worktrees` and prunes clean, inactive ones (dirty trees and
+  active jobs are always kept; orphaned directories are deleted).
+- `npm test` caps test-file concurrency at 6: the default 16-way parallelism
+  oversubscribed the machine, tripling wall time and flaking timing tests.
+
 ## 1.4.1 (fork)
 
 Sandbox correctness, single-item retrieval, and test reliability:
