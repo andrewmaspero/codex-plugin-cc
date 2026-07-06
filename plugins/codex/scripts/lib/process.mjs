@@ -54,6 +54,21 @@ function looksLikeMissingProcessMessage(text) {
   return /not found|no running instance|cannot find|does not exist|no such process/i.test(text);
 }
 
+// Returns true/false when liveness is knowable, null when the pid is unusable.
+// EPERM means "alive but not ours", so it counts as alive.
+export function isProcessAlive(pid, options = {}) {
+  if (!Number.isFinite(pid) || pid <= 0) {
+    return null;
+  }
+  const killImpl = options.killImpl ?? process.kill.bind(process);
+  try {
+    killImpl(pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === "EPERM" ? true : false;
+  }
+}
+
 export function terminateProcessTree(pid, options = {}) {
   if (!Number.isFinite(pid)) {
     return { attempted: false, delivered: false, method: null };

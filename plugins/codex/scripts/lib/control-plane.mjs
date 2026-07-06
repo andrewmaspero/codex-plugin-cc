@@ -14,7 +14,8 @@ import process from "node:process";
 import { BROKER_BUSY_RPC_CODE, CodexAppServerClient } from "./app-server.mjs";
 import { requestThreadGoal, steerAppServerTurn } from "./codex.mjs";
 import { listJobs, readJobFile, resolveJobFile, upsertJob } from "./state.mjs";
-import { enrichJob, sortJobsNewestFirst } from "./job-control.mjs";
+import { enrichJob, reapOrphanedJobs, sortJobsNewestFirst } from "./job-control.mjs";
+import { isProcessAlive } from "./process.mjs";
 import { appendLogLine, SESSION_ID_ENV } from "./tracked-jobs.mjs";
 import { resolveWorkspaceRoot } from "./workspace.mjs";
 
@@ -784,18 +785,6 @@ function stripLogTimestamp(line) {
   return line.replace(/^\[[^\]]+\]\s*/, "");
 }
 
-function isProcessAlive(pid) {
-  if (!Number.isFinite(pid) || pid <= 0) {
-    return null;
-  }
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return error?.code === "EPERM" ? true : false;
-  }
-}
-
 export function buildJobAlerts(job, options = {}) {
   const now = options.now ?? Date.now();
   const stallSeconds = Math.max(30, Number(options.stallSeconds) || DEFAULT_STALL_SECONDS);
@@ -920,7 +909,10 @@ async function collectGoalAlerts(cwd, jobs) {
 
 export async function buildAlertsSnapshot(cwd, reference = "", options = {}) {
   const workspaceRoot = resolveWorkspaceRoot(cwd);
-  const jobs = sortJobsNewestFirst(listJobs(workspaceRoot));
+  // Reap dead workers before building alerts so an orphan surfaces as a
+  // terminal "failed" alert (and status pollers stop waiting on it) instead
+  // of an advisory on a job that still claims to be running.
+  const jobs = sortJobsNewestFirst(reapOrphanedJobs(workspaceRoot, listJobs(workspaceRoot), options));
   const scoped = reference
     ? jobs.filter((job) => job.id === reference || job.id.startsWith(reference))
     : jobs.filter((job) => job.status === "queued" || job.status === "running" || job.status === "failed");

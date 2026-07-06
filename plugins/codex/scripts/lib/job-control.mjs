@@ -1,8 +1,9 @@
 import fs from "node:fs";
 
 import { getSessionRuntimeStatus } from "./codex.mjs";
-import { getConfig, listJobs, readJobFile, resolveJobFile } from "./state.mjs";
-import { SESSION_ID_ENV } from "./tracked-jobs.mjs";
+import { isProcessAlive } from "./process.mjs";
+import { getConfig, listJobs, readJobFile, resolveJobFile, updateState, writeJobFile } from "./state.mjs";
+import { appendLogLine, SESSION_ID_ENV } from "./tracked-jobs.mjs";
 import { resolveWorkspaceRoot } from "./workspace.mjs";
 
 export const DEFAULT_MAX_STATUS_JOBS = 8;
@@ -210,10 +211,72 @@ function matchJobReference(jobs, reference, predicate = () => true) {
   throw new Error(`No job found for "${reference}". Run /codex:status to list known jobs.`);
 }
 
+function orphanMessage(pid) {
+  return `Worker process ${pid} died without recording a result; marked failed by the orphan reaper.`;
+}
+
+// A background worker records its own completion before exiting, so a job that
+// is still "running"/"queued" while its pid is dead can never finish on its
+// own — every status/alerts poll would report "running" forever (observed: a
+// zombie job sat for 60 minutes; the canonical wait poller never woke). Reap
+// such jobs to "failed" at read time so any poller sees a terminal state
+// within one poll cycle. The status re-check runs inside the state lock: if
+// the worker wrote "completed" between our snapshot read and this write, the
+// job is no longer active and we leave it untouched.
+export function reapOrphanedJobs(workspaceRoot, jobs, options = {}) {
+  const isAlive = options.isProcessAlive ?? isProcessAlive;
+  let reapedAny = false;
+
+  for (const job of jobs) {
+    const active = job.status === "running" || job.status === "queued";
+    if (!active || isAlive(job.pid) !== false) {
+      continue;
+    }
+
+    const completedAt = new Date().toISOString();
+    const patch = {
+      status: "failed",
+      phase: "orphaned",
+      pid: null,
+      completedAt,
+      errorMessage: orphanMessage(job.pid)
+    };
+
+    let reaped = false;
+    updateState(workspaceRoot, (state) => {
+      const index = state.jobs.findIndex((candidate) => candidate.id === job.id);
+      if (index === -1) {
+        return;
+      }
+      const current = state.jobs[index];
+      const stillActive = current.status === "running" || current.status === "queued";
+      if (!stillActive || current.pid !== job.pid) {
+        return;
+      }
+      state.jobs[index] = { ...current, ...patch, updatedAt: completedAt };
+      reaped = true;
+    });
+
+    if (!reaped) {
+      continue;
+    }
+    reapedAny = true;
+    const stored = readStoredJob(workspaceRoot, job.id);
+    if (stored) {
+      writeJobFile(workspaceRoot, job.id, { ...stored, ...patch });
+    }
+    appendLogLine(job.logFile, orphanMessage(job.pid));
+  }
+
+  return reapedAny ? listJobs(workspaceRoot) : jobs;
+}
+
 export function buildStatusSnapshot(cwd, options = {}) {
   const workspaceRoot = resolveWorkspaceRoot(cwd);
   const config = getConfig(workspaceRoot);
-  const jobs = sortJobsNewestFirst(filterJobsForCurrentSession(listJobs(workspaceRoot), options));
+  const jobs = sortJobsNewestFirst(
+    filterJobsForCurrentSession(reapOrphanedJobs(workspaceRoot, listJobs(workspaceRoot), options), options)
+  );
   const maxJobs = options.maxJobs ?? DEFAULT_MAX_STATUS_JOBS;
   const maxProgressLines = options.maxProgressLines ?? DEFAULT_MAX_PROGRESS_LINES;
 
@@ -241,7 +304,7 @@ export function buildStatusSnapshot(cwd, options = {}) {
 
 export function buildSingleJobSnapshot(cwd, reference, options = {}) {
   const workspaceRoot = resolveWorkspaceRoot(cwd);
-  const jobs = sortJobsNewestFirst(listJobs(workspaceRoot));
+  const jobs = sortJobsNewestFirst(reapOrphanedJobs(workspaceRoot, listJobs(workspaceRoot), options));
   const selected = matchJobReference(jobs, reference);
   if (!selected) {
     throw new Error(`No job found for "${reference}". Run /codex:status to inspect known jobs.`);
