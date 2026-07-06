@@ -16,6 +16,7 @@ const readline = require("node:readline");
 	const STATE_PATH = ${JSON.stringify(statePath)};
 	const BEHAVIOR = ${JSON.stringify(behavior)};
 	const interruptibleTurns = new Map();
+	const internalTurnsByThread = new Map();
 
 	function loadState() {
 	  if (!fs.existsSync(STATE_PATH)) {
@@ -358,6 +359,22 @@ rl.on("line", (line) => {
         };
         saveState(state);
         send({ id: message.id, result: { thread: buildThread(thread), model: message.params.model || "gpt-5.4", modelProvider: "openai", serviceTier: null, cwd: thread.cwd, approvalPolicy: "never", sandbox: { type: "readOnly", access: { type: "fullAccess" }, networkAccess: false }, reasoningEffort: null } });
+        if (BEHAVIOR === "internal-turn-on-resume" || BEHAVIOR === "absorbed-turn-on-resume") {
+          // Model the real app-server running a server-initiated turn (goal
+          // continuation / auto-compaction) on the resumed thread: its
+          // turn/started predates the client's own turn/start request.
+          const internalTurnId = "internal_" + nextTurnId(state);
+          internalTurnsByThread.set(thread.id, internalTurnId);
+          send({ method: "turn/started", params: { threadId: thread.id, turn: buildTurn(internalTurnId) } });
+          send({
+            method: "item/started",
+            params: {
+              threadId: thread.id,
+              turnId: internalTurnId,
+              item: { type: "reasoning", id: "reasoning_" + internalTurnId, summary: [{ text: "Evaluating the thread goal." }], content: [] }
+            }
+          });
+        }
         break;
       }
 
@@ -609,6 +626,64 @@ rl.on("line", (line) => {
             completed: { type: "agentMessage", id: "msg_" + turnId, text: payload, phase: "final_answer" }
           }
         ];
+
+	        if (BEHAVIOR === "internal-turn-on-resume" && internalTurnsByThread.has(thread.id)) {
+	          // A server-initiated turn is still active on this thread: the app
+	          // server queues the client's turn and answers with an API turn id
+	          // that never appears in notifications (mirrors codex-cli 0.140.0,
+	          // where the turn/start response id differs from the notification
+	          // turn ids). The internal turn completes first; only then does the
+	          // client's real turn emit its events under a fresh id.
+	          const internalTurnId = internalTurnsByThread.get(thread.id);
+	          internalTurnsByThread.delete(thread.id);
+	          const realTurnId = "real_" + nextTurnId(state);
+	          setTimeout(() => {
+	            send({
+	              method: "item/completed",
+	              params: {
+	                threadId: thread.id,
+	                turnId: internalTurnId,
+	                item: { type: "agentMessage", id: "msg_" + internalTurnId, text: "Goal evaluation finished.", phase: "analysis" }
+	              }
+	            });
+	            send({ method: "turn/completed", params: { threadId: thread.id, turn: buildTurn(internalTurnId, "completed") } });
+	          }, 150);
+	          setTimeout(() => {
+	            send({ method: "turn/started", params: { threadId: thread.id, turn: buildTurn(realTurnId) } });
+	            send({
+	              method: "item/completed",
+	              params: {
+	                threadId: thread.id,
+	                turnId: realTurnId,
+	                item: { type: "agentMessage", id: "msg_" + realTurnId, text: payload, phase: "final_answer" }
+	              }
+	            });
+	            send({ method: "turn/completed", params: { threadId: thread.id, turn: buildTurn(realTurnId, "completed") } });
+	          }, 300);
+	          break;
+	        }
+
+	        if (BEHAVIOR === "absorbed-turn-on-resume" && internalTurnsByThread.has(thread.id)) {
+	          // The already-active server-initiated turn ABSORBS the submitted
+	          // input (codex core injects user input submitted mid-turn into the
+	          // running turn): the response's turn id never emits any events and
+	          // no follow-up turn ever starts. The active turn answers the prompt
+	          // and completes under its own id.
+	          const internalTurnId = internalTurnsByThread.get(thread.id);
+	          internalTurnsByThread.delete(thread.id);
+	          setTimeout(() => {
+	            send({
+	              method: "item/completed",
+	              params: {
+	                threadId: thread.id,
+	                turnId: internalTurnId,
+	                item: { type: "agentMessage", id: "msg_" + internalTurnId, text: payload, phase: "final_answer" }
+	              }
+	            });
+	            send({ method: "turn/completed", params: { threadId: thread.id, turn: buildTurn(internalTurnId, "completed") } });
+	          }, 150);
+	          break;
+	        }
 
 	        if (BEHAVIOR === "interruptible-slow-task") {
 	          send({ method: "turn/started", params: { threadId: thread.id, turn: buildTurn(turnId) } });

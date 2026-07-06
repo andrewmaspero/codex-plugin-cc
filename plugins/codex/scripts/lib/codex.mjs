@@ -14,6 +14,7 @@
  *   threadTurnIds: Map<string, string>,
  *   threadLabels: Map<string, string>,
  *   turnId: string | null,
+ *   rootTurnSource: "response" | "started" | "adopted" | null,
  *   bufferedNotifications: AppServerNotification[],
  *   completion: Promise<TurnCaptureState>,
  *   resolveCompletion: (state: TurnCaptureState) => void,
@@ -338,6 +339,7 @@ function createTurnCaptureState(threadId, options = {}) {
     threadTurnIds: new Map(),
     threadLabels: new Map(),
     turnId: null,
+    rootTurnSource: null,
     bufferedNotifications: [],
     completion,
     resolveCompletion,
@@ -393,8 +395,22 @@ function completeTurn(state, turn = null, options = {}) {
   state.resolveCompletion(state);
 }
 
+// How long to wait after an ADOPTED turn completes before finalizing: when a
+// prompt is merged into an already-active turn, the app-server may instead
+// requeue it as a brand-new turn that starts right after the active one
+// completes. The grace window lets that follow-up turn re-latch the capture.
+const ADOPTED_COMPLETION_GRACE_MS = 1500;
+
 function scheduleInferredCompletion(state) {
   if (state.completed || state.finalTurn || !state.finalAnswerSeen) {
+    return;
+  }
+
+  // An adopted turn may be the thread's own goal-continuation work rather
+  // than a response to our input; require its real turn/completed (plus the
+  // adoption grace window) instead of inferring completion from a final
+  // answer that may predate our prompt.
+  if (state.rootTurnSource === "adopted") {
     return;
   }
 
@@ -435,8 +451,68 @@ function isRootTurnStarted(state, message) {
 }
 
 function captureRootTurnStarted(state, message) {
-  state.turnId = message.params.turn.id;
+  const nextTurnId = message.params.turn.id;
+  // A pending adopted-turn completion is superseded by a real follow-up turn
+  // (the app-server requeued our input as its own turn); keep capturing.
+  clearCompletionTimer(state);
+  if (state.turnId && state.turnId !== nextTurnId) {
+    // A stale final answer from a previously tracked turn must not trigger
+    // inferred completion of the new one.
+    state.finalAnswerSeen = false;
+  }
+  state.turnId = nextTurnId;
   state.threadTurnIds.set(state.threadId, state.turnId);
+  state.rootTurnSource = "started";
+}
+
+/**
+ * The turn/start response's turn id is a submission id that does not always
+ * match the id notifications carry. Worse, when the thread already has an
+ * active turn (a goal-continuation turn the server started on its own), the
+ * submitted input is merged into THAT turn and no turn with the response id
+ * ever emits events. When root-thread turn events arrive for an id we do not
+ * track and no tracked turn has materialized yet, adopt the live turn so the
+ * job streams (and finishes with) the work that actually consumed its prompt.
+ */
+function shouldAdoptLiveRootTurn(state, message) {
+  if (state.completed || state.rootTurnSource === "started" || state.rootTurnSource === "adopted") {
+    return false;
+  }
+  if ((extractThreadId(message) ?? null) !== state.threadId) {
+    return false;
+  }
+  if (!extractTurnId(message)) {
+    return false;
+  }
+  return (
+    message.method === "item/started" ||
+    message.method === "item/updated" ||
+    message.method === "item/completed" ||
+    message.method === "turn/completed"
+  );
+}
+
+function adoptLiveRootTurn(state, message) {
+  const turnId = extractTurnId(message);
+  state.turnId = turnId;
+  state.threadTurnIds.set(state.threadId, turnId);
+  state.rootTurnSource = "adopted";
+  state.finalAnswerSeen = false;
+  emitProgress(
+    state.onProgress,
+    `Adopted live turn ${turnId}: the thread was already running a turn, so this prompt was merged into it.`,
+    "starting",
+    { threadId: state.threadId, turnId }
+  );
+}
+
+function scheduleAdoptedCompletion(state, turn) {
+  clearCompletionTimer(state);
+  state.completionTimer = setTimeout(() => {
+    state.completionTimer = null;
+    completeTurn(state, turn);
+  }, ADOPTED_COMPLETION_GRACE_MS);
+  state.completionTimer.unref?.();
 }
 
 function recordItem(state, item, lifecycle, threadId = null) {
@@ -580,6 +656,18 @@ function applyTurnNotification(state, message) {
         scheduleInferredCompletion(state);
         break;
       }
+      if (state.rootTurnSource === "adopted") {
+        // The adopted turn may have absorbed our input (finalize with it) or
+        // the server may requeue our input as a fresh turn immediately after
+        // it; wait a short grace window for that follow-up turn/started.
+        emitProgress(
+          state.onProgress,
+          `Adopted turn ${message.params.turn.status}; finalizing unless a follow-up turn starts.`,
+          "finalizing"
+        );
+        scheduleAdoptedCompletion(state, message.params.turn);
+        break;
+      }
       emitProgress(
         state.onProgress,
         `Turn ${message.params.turn.status === "completed" ? "completed" : message.params.turn.status}.`,
@@ -626,6 +714,11 @@ async function captureTurn(client, threadId, startRequest, options = {}) {
     }
 
     if (!belongsToTurn(state, message)) {
+      if (shouldAdoptLiveRootTurn(state, message)) {
+        adoptLiveRootTurn(state, message);
+        applyTurnNotification(state, message);
+        return;
+      }
       if (previousHandler) {
         previousHandler(message);
       }
@@ -638,9 +731,14 @@ async function captureTurn(client, threadId, startRequest, options = {}) {
   try {
     const response = await startRequest();
     options.onResponse?.(response, state);
-    state.turnId = response.turn?.id ?? null;
-    if (state.turnId) {
-      state.threadTurnIds.set(state.threadId, state.turnId);
+    const responseTurnId = response.turn?.id ?? null;
+    // A root turn/started that arrived before the response is authoritative:
+    // the response's turn id is a submission id that may never appear in
+    // notifications, so it must not clobber an id observed on the wire.
+    if (responseTurnId && state.rootTurnSource !== "started" && state.rootTurnSource !== "adopted") {
+      state.turnId = responseTurnId;
+      state.threadTurnIds.set(state.threadId, responseTurnId);
+      state.rootTurnSource = "response";
     }
     for (const message of state.bufferedNotifications) {
       if (shouldBypassTurnCapture(message)) {
@@ -651,6 +749,9 @@ async function captureTurn(client, threadId, startRequest, options = {}) {
         captureRootTurnStarted(state, message);
         applyTurnNotification(state, message);
       } else if (belongsToTurn(state, message)) {
+        applyTurnNotification(state, message);
+      } else if (shouldAdoptLiveRootTurn(state, message)) {
+        adoptLiveRootTurn(state, message);
         applyTurnNotification(state, message);
       } else {
         if (previousHandler) {

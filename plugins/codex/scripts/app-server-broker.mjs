@@ -22,6 +22,10 @@ function buildStreamThreadIds(method, params, result) {
   return threadIds;
 }
 
+function extractNotificationTurnId(message) {
+  return message.params?.turn?.id ?? message.params?.turnId ?? null;
+}
+
 function buildJsonRpcError(code, message, data) {
   return data === undefined ? { code, message } : { code, message, data };
 }
@@ -74,6 +78,14 @@ async function main() {
   let activeRequestSocket = null;
   let activeStreamSocket = null;
   let activeStreamThreadIds = null;
+  // Turn ids that belong to the active stream: the streaming response's turn id
+  // plus every turn/started observed on a stream thread while the stream is
+  // owned (the real Codex app-server assigns notification turn ids that differ
+  // from the turn/start response id, so both must be tracked).
+  let activeStreamTurnIds = null;
+  // While a streaming request is in flight, capture turn/started ids for its
+  // thread so a turn that starts before the response resolves is not lost.
+  let pendingStreamCapture = null;
   const sockets = new Set();
 
   function clearSocketOwnership(socket) {
@@ -83,10 +95,23 @@ async function main() {
     if (activeStreamSocket === socket) {
       activeStreamSocket = null;
       activeStreamThreadIds = null;
+      activeStreamTurnIds = null;
     }
   }
 
   function routeNotification(message) {
+    if (message.method === "turn/started") {
+      const threadId = message.params?.threadId ?? null;
+      const turnId = extractNotificationTurnId(message);
+      if (threadId && turnId) {
+        if (pendingStreamCapture?.threadIds.has(threadId)) {
+          pendingStreamCapture.turnIds.add(turnId);
+        } else if (activeStreamSocket && activeStreamThreadIds?.has(threadId)) {
+          activeStreamTurnIds?.add(turnId);
+        }
+      }
+    }
+
     const target = activeRequestSocket ?? activeStreamSocket;
     if (!target) {
       return;
@@ -94,9 +119,18 @@ async function main() {
     send(target, message);
     if (message.method === "turn/completed" && activeStreamSocket === target) {
       const threadId = message.params?.threadId ?? null;
-      if (!threadId || !activeStreamThreadIds || activeStreamThreadIds.has(threadId)) {
+      const turnId = extractNotificationTurnId(message);
+      const threadMatches = !threadId || !activeStreamThreadIds || activeStreamThreadIds.has(threadId);
+      // The Codex app-server interleaves server-initiated turns (goal
+      // evaluation, auto-compaction) on the same thread. Their turn/completed
+      // must NOT release stream ownership, or every event of the client's own
+      // still-pending turn is dropped (observed: continue jobs logging nothing
+      // after "Thread ready" while their turn ran to completion invisibly).
+      const turnMatches = !turnId || !activeStreamTurnIds || activeStreamTurnIds.size === 0 || activeStreamTurnIds.has(turnId);
+      if (threadMatches && turnMatches) {
         activeStreamSocket = null;
         activeStreamThreadIds = null;
+        activeStreamTurnIds = null;
         if (activeRequestSocket === target) {
           activeRequestSocket = null;
         }
@@ -208,6 +242,12 @@ async function main() {
 
         const isStreaming = STREAMING_METHODS.has(message.method);
         activeRequestSocket = socket;
+        if (isStreaming) {
+          pendingStreamCapture = {
+            threadIds: buildStreamThreadIds(message.method, message.params ?? {}, null),
+            turnIds: new Set()
+          };
+        }
 
         try {
           const result = await appClient.request(message.method, message.params ?? {});
@@ -215,6 +255,10 @@ async function main() {
           if (isStreaming) {
             activeStreamSocket = socket;
             activeStreamThreadIds = buildStreamThreadIds(message.method, message.params ?? {}, result);
+            activeStreamTurnIds = pendingStreamCapture?.turnIds ?? new Set();
+            if (result?.turn?.id) {
+              activeStreamTurnIds.add(result.turn.id);
+            }
           }
           if (activeRequestSocket === socket) {
             activeRequestSocket = null;
@@ -229,6 +273,10 @@ async function main() {
           }
           if (activeStreamSocket === socket && !isStreaming) {
             activeStreamSocket = null;
+          }
+        } finally {
+          if (isStreaming) {
+            pendingStreamCapture = null;
           }
         }
       }
