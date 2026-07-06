@@ -13,7 +13,7 @@ import process from "node:process";
 
 import { BROKER_BUSY_RPC_CODE, CodexAppServerClient } from "./app-server.mjs";
 import { requestThreadGoal, steerAppServerTurn } from "./codex.mjs";
-import { listJobs, readJobFile, resolveJobFile, upsertJob } from "./state.mjs";
+import { listJobs, readJobFile, resolveJobFile, resolveJobFileGlobally, upsertJob } from "./state.mjs";
 import { enrichJob, sortJobsNewestFirst } from "./job-control.mjs";
 import { appendLogLine, SESSION_ID_ENV } from "./tracked-jobs.mjs";
 import { resolveWorkspaceRoot } from "./workspace.mjs";
@@ -99,6 +99,8 @@ export function resolveSteerableJob(cwd, reference) {
   const activeJobs = jobs.filter((job) => job.status === "queued" || job.status === "running");
 
   let job = null;
+  let stored = null;
+  let jobWorkspaceRoot = workspaceRoot;
   if (reference) {
     job = activeJobs.find((candidate) => candidate.id === reference) ?? null;
     if (!job) {
@@ -109,10 +111,25 @@ export function resolveSteerableJob(cwd, reference) {
       job = prefixMatches[0] ?? null;
     }
     if (!job) {
+      const globalMatch = resolveJobFileGlobally(workspaceRoot, reference);
+      if (globalMatch) {
+        stored = globalMatch.job;
+        if (stored.status !== "queued" && stored.status !== "running") {
+          throw new Error(
+            `Job ${stored.id} is ${stored.status}, so there is no active turn to steer. Use /codex:continue ${stored.threadId ?? "<thread-id>"} for a follow-up turn instead.`
+          );
+        }
+        job = stored;
+        jobWorkspaceRoot = job.workspaceRoot ?? workspaceRoot;
+      }
+    }
+    if (!job) {
       const finished = jobs.find((candidate) => candidate.id === reference || candidate.id.startsWith(reference));
-      if (finished) {
+      const globalFinished = stored && stored.status !== "queued" && stored.status !== "running" ? stored : null;
+      if (finished || globalFinished) {
+        const target = globalFinished ?? finished;
         throw new Error(
-          `Job ${finished.id} is ${finished.status}, so there is no active turn to steer. Use /codex:continue ${finished.threadId ?? "<thread-id>"} for a follow-up turn instead.`
+          `Job ${target.id} is ${target.status}, so there is no active turn to steer. Use /codex:continue ${target.threadId ?? "<thread-id>"} for a follow-up turn instead.`
         );
       }
       throw new Error(`No active job found for "${reference}". Run /codex:status to list jobs.`);
@@ -129,7 +146,7 @@ export function resolveSteerableJob(cwd, reference) {
     job = sessionJobs[0];
   }
 
-  const stored = fs.existsSync(resolveJobFile(workspaceRoot, job.id)) ? readJobFile(resolveJobFile(workspaceRoot, job.id)) : {};
+  stored = stored ?? (fs.existsSync(resolveJobFile(workspaceRoot, job.id)) ? readJobFile(resolveJobFile(workspaceRoot, job.id)) : {});
   const threadId = job.threadId ?? stored.threadId ?? null;
   const turnId = job.turnId ?? stored.turnId ?? null;
   if (!threadId || !turnId) {
@@ -138,7 +155,7 @@ export function resolveSteerableJob(cwd, reference) {
     );
   }
 
-  return { workspaceRoot, job, threadId, turnId };
+  return { workspaceRoot: jobWorkspaceRoot, job, threadId, turnId };
 }
 
 export async function steerJob(cwd, reference, message) {
@@ -232,7 +249,11 @@ export function resolveGoalTarget(cwd, reference) {
     reference = scoped[0].id;
   }
 
-  const job = jobs.find((candidate) => candidate.id === reference) ?? jobs.find((candidate) => candidate.id.startsWith(reference)) ?? null;
+  let job = jobs.find((candidate) => candidate.id === reference) ?? jobs.find((candidate) => candidate.id.startsWith(reference)) ?? null;
+  if (!job && reference) {
+    const globalMatch = resolveJobFileGlobally(workspaceRoot, reference);
+    job = globalMatch?.job ?? null;
+  }
   if (job) {
     if (!job.threadId) {
       throw new Error(`Job ${job.id} has not reported a Codex thread yet. Wait for /codex:status ${job.id} to show one.`);
@@ -678,8 +699,9 @@ export function renderItemList(payload) {
 export function tailJobLog(cwd, reference, options = {}) {
   const workspaceRoot = resolveWorkspaceRoot(cwd);
   const jobs = sortJobsNewestFirst(listJobs(workspaceRoot));
+  const globalMatch = reference ? resolveJobFileGlobally(workspaceRoot, reference) : null;
   const job = reference
-    ? jobs.find((candidate) => candidate.id === reference || candidate.id.startsWith(reference))
+    ? globalMatch?.job ?? jobs.find((candidate) => candidate.id === reference || candidate.id.startsWith(reference))
     : jobs.find((candidate) => candidate.status === "queued" || candidate.status === "running") ?? jobs[0];
   if (!job) {
     throw new Error(reference ? `No job found for "${reference}".` : "No Codex jobs found for this repository.");
@@ -735,8 +757,9 @@ function walkArtifactFiles(dir, baseDir, collected, limit) {
 export function listJobArtifacts(cwd, reference = "", options = {}) {
   const workspaceRoot = resolveWorkspaceRoot(cwd);
   const jobs = sortJobsNewestFirst(listJobs(workspaceRoot));
+  const globalMatch = reference ? resolveJobFileGlobally(workspaceRoot, reference) : null;
   const job = reference
-    ? jobs.find((candidate) => candidate.id === reference) ?? jobs.find((candidate) => candidate.id.startsWith(reference))
+    ? globalMatch?.job ?? jobs.find((candidate) => candidate.id === reference) ?? jobs.find((candidate) => candidate.id.startsWith(reference))
     : jobs[0];
   if (!job) {
     throw new Error(reference ? `No job found for "${reference}".` : "No Codex jobs found for this repository.");

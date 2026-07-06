@@ -34,13 +34,23 @@ Forwarding rules:
 - Sandbox controls: `--full` (or `--sandbox danger-full-access`) runs with full permissions, `--write` allows workspace writes, `--sandbox <mode>` sets an explicit mode. Treat these as runtime controls and forward them without including them in the task text.
 - If the user passed no sandbox control, do not add one: the workspace's configured default sandbox (set via `setup --sandbox`) applies. Only add `--write` when the task clearly requires edits, the user gave no sandbox control, and no workspace default is known.
 - Worktree controls: forward `--worktree` and `--worktree-name <name>` as-is when present; they isolate the job in a separate git worktree.
-- Goal controls: forward `--goal <objective>` and `--goal-budget <tokens>` as-is when present; they anchor long-running loops. Do not include them in the task text.
+- Goal controls: forward `--goal <objective>`, `--goal-file <path>`, and `--goal-budget <tokens>` as-is when present; they anchor long-running loops. Do not include them in the task text.
 - Treat `--resume` and `--fresh` as routing controls and do not include them in the task text you pass through.
 - `--resume` means add `--resume-last`.
 - `--fresh` means do not add `--resume-last`.
 - If the user is clearly asking to continue prior Codex work in this repository, such as "continue", "keep going", "resume", "apply the top fix", or "dig deeper", add `--resume-last` unless `--fresh` is present.
 - Otherwise forward the task as a fresh `task` run.
 - Preserve the user's task text as-is apart from stripping routing flags.
+- If the final task prompt spans multiple lines or contains shell metacharacters such as backticks, quotes, `$`, `$(...)`, parentheses, semicolons, pipes, redirects, or braces, pass it over stdin with `--prompt-stdin`; do not put that prompt text in argv.
+- Use this heredoc shape for shell-sensitive prompts:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs" task --background --prompt-stdin <<'CODEX_TASK_EOF'
+<verbatim prompt text>
+CODEX_TASK_EOF
+```
+
+- If a long goal is needed while the prompt uses stdin, write the goal to a file and pass `--goal-file <path>`, because stdin is reserved for the prompt.
 - Return the stdout of the `codex-companion` command exactly as-is.
 - If the Bash call fails or Codex cannot be invoked, return nothing.
 

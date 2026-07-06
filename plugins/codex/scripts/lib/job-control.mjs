@@ -1,7 +1,7 @@
 import fs from "node:fs";
 
 import { getSessionRuntimeStatus } from "./codex.mjs";
-import { getConfig, listJobs, readJobFile, resolveJobFile } from "./state.mjs";
+import { getConfig, listJobs, readJobFile, resolveJobFile, resolveJobFileGlobally } from "./state.mjs";
 import { SESSION_ID_ENV } from "./tracked-jobs.mjs";
 import { resolveWorkspaceRoot } from "./workspace.mjs";
 
@@ -241,6 +241,18 @@ export function buildStatusSnapshot(cwd, options = {}) {
 
 export function buildSingleJobSnapshot(cwd, reference, options = {}) {
   const workspaceRoot = resolveWorkspaceRoot(cwd);
+  if (reference) {
+    const globalMatch = resolveJobFileGlobally(workspaceRoot, reference);
+    if (globalMatch) {
+      return {
+        workspaceRoot: globalMatch.job.workspaceRoot ?? workspaceRoot,
+        job: enrichJob(globalMatch.job, { maxProgressLines: options.maxProgressLines }),
+        jobFile: globalMatch.jobFile,
+        stateDir: globalMatch.stateDir
+      };
+    }
+  }
+
   const jobs = sortJobsNewestFirst(listJobs(workspaceRoot));
   const selected = matchJobReference(jobs, reference);
   if (!selected) {
@@ -255,6 +267,25 @@ export function buildSingleJobSnapshot(cwd, reference, options = {}) {
 
 export function resolveResultJob(cwd, reference) {
   const workspaceRoot = resolveWorkspaceRoot(cwd);
+  if (reference) {
+    const globalMatch = resolveJobFileGlobally(workspaceRoot, reference);
+    if (globalMatch) {
+      const job = globalMatch.job;
+      if (job.status === "queued" || job.status === "running") {
+        throw new Error(`Job ${job.id} is still ${job.status}. Check /codex:status and try again once it finishes.`);
+      }
+      if (job.status === "completed" || job.status === "failed" || job.status === "cancelled") {
+        return {
+          workspaceRoot: job.workspaceRoot ?? workspaceRoot,
+          job,
+          storedJob: job,
+          jobFile: globalMatch.jobFile,
+          stateDir: globalMatch.stateDir
+        };
+      }
+    }
+  }
+
   const jobs = sortJobsNewestFirst(reference ? listJobs(workspaceRoot) : filterJobsForCurrentSession(listJobs(workspaceRoot)));
   let selected;
   try {
@@ -299,11 +330,33 @@ export function resolveCancelableJob(cwd, reference, options = {}) {
   const activeJobs = jobs.filter((job) => job.status === "queued" || job.status === "running");
 
   if (reference) {
-    const selected = matchJobReference(activeJobs, reference);
-    if (!selected) {
-      throw new Error(`No active job found for "${reference}".`);
+    let localSelected = activeJobs.find((job) => job.id === reference) ?? null;
+    if (!localSelected) {
+      const prefixMatches = activeJobs.filter((job) => job.id.startsWith(reference));
+      if (prefixMatches.length > 1) {
+        throw new Error(`Job reference "${reference}" is ambiguous. Use a longer job id.`);
+      }
+      localSelected = prefixMatches[0] ?? null;
     }
-    return { workspaceRoot, job: selected };
+    if (localSelected) {
+      return { workspaceRoot, job: localSelected };
+    }
+
+    const globalMatch = resolveJobFileGlobally(workspaceRoot, reference);
+    if (globalMatch) {
+      const job = globalMatch.job;
+      if (job.status !== "queued" && job.status !== "running") {
+        throw new Error(`Job ${job.id} is ${job.status}; only active jobs can be cancelled.`);
+      }
+      return {
+        workspaceRoot: job.workspaceRoot ?? workspaceRoot,
+        job,
+        storedJob: job,
+        jobFile: globalMatch.jobFile,
+        stateDir: globalMatch.stateDir
+      };
+    }
+    throw new Error(`No active job found for "${reference}".`);
   }
 
   const sessionScopedActiveJobs = filterJobsForCurrentSession(activeJobs, options);

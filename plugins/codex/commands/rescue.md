@@ -1,6 +1,6 @@
 ---
 description: Delegate investigation, an explicit fix request, or follow-up rescue work to the Codex rescue subagent
-argument-hint: "[--background|--wait] [--resume|--fresh] [--write|--full|--sandbox <mode>] [--worktree|--worktree-name <name>] [--goal <objective>] [--model <model|spark>] [--effort <none|minimal|low|medium|high|xhigh>] [what Codex should investigate, solve, or continue]"
+argument-hint: "[--background|--wait] [--resume|--fresh] [--write|--full|--sandbox <mode>] [--worktree|--worktree-name <name>] [--goal <objective>|--goal-file <path>] [--model <model|spark>] [--effort <none|minimal|low|medium|high|xhigh>] [what Codex should investigate, solve, or continue]"
 allowed-tools: Bash(node:*), AskUserQuestion, Agent
 ---
 
@@ -18,7 +18,7 @@ Execution mode:
 - If neither flag is present, default to foreground.
 - `--background` and `--wait` are execution flags for Claude Code. Do not forward them to `task`, and do not treat them as part of the natural-language task text.
 - `--model` and `--effort` are runtime-selection flags. Preserve them for the forwarded `task` call, but do not treat them as part of the natural-language task text.
-- `--goal <objective>` and `--goal-budget <tokens>` set a persistent thread goal for long-running loops (see `/codex:goal`). Preserve them for the forwarded `task` call.
+- `--goal <objective>`, `--goal-file <path>`, and `--goal-budget <tokens>` set a persistent thread goal for long-running loops (see `/codex:goal`). Preserve them for the forwarded `task` call.
 - A bare ` -- ` in the request switches everything after it to verbatim passthrough; avoid a standalone `--` inside ordinary task prose.
 - `--write`, `--full`, `--sandbox <mode>`, `--worktree`, and `--worktree-name <name>` are sandbox/isolation flags. Preserve them for the forwarded `task` call, but do not treat them as part of the natural-language task text. When none are present, the workspace's configured default sandbox applies (set once with `/codex:setup --sandbox full` for trusted full-permission runs).
 - If the request includes `--resume`, do not ask whether to continue. The user already chose.
@@ -42,6 +42,15 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs" task-resume-candidate -
 Operating rules:
 
 - The subagent is a thin forwarder only. It should use one `Bash` call to invoke `node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs" task ...` and return that command's stdout as-is.
+- If the forwarded task prompt spans multiple lines or contains shell metacharacters such as backticks, quotes, `$`, `$(...)`, parentheses, semicolons, pipes, redirects, or braces, the subagent must pass the prompt over stdin with `--prompt-stdin` instead of placing it in argv:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs" task --background --prompt-stdin <<'CODEX_TASK_EOF'
+<verbatim prompt text>
+CODEX_TASK_EOF
+```
+
+- If both a long goal and a stdin prompt are needed, write the goal to a file and forward it with `--goal-file <path>`; stdin is reserved for the prompt.
 - Return the Codex companion stdout verbatim to the user.
 - Do not paraphrase, summarize, rewrite, or add commentary before or after it.
 - Do not ask the subagent to inspect files, monitor progress, poll `/codex:status`, fetch `/codex:result`, call `/codex:cancel`, summarize output, or do follow-up work of its own.

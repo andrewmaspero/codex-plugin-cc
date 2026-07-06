@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.4.0 (fork)
+
+Job visibility and launch-control fixes:
+
+- Explicit job ids for `status`, `result`, `tail`, `artifacts`, `cancel`, `steer`, and `goal` resolve across all Codex companion workspace state directories instead of being limited to the current session/workspace.
+- Added `wait <job-id> [--timeout <seconds>]`, which watches the job JSON directory and falls back to a 2s stat poll, exiting as soon as the job reaches a terminal status.
+- `task` now accepts `--prompt-stdin`, and both `task` and `continue` accept `--goal-file <path>` so multi-line prompts and shell metacharacters do not have to travel through argv.
+- Every subcommand intercepts `-h`/`--help` before side effects, so help requests cannot start Codex work or mutate state.
+- `review --background` and `adversarial-review --background` register a tracked job, spawn the detached worker, print the job id, and return promptly; slow review preparation runs inside the worker.
+- Fallback state paths are canonicalized so parent processes and child workers agree on macOS `/var` versus `/private/var` temp paths.
+
 ## 1.3.1 (fork)
 
 Production-readiness gate fixes (second fresh-context review):
