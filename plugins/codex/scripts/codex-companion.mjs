@@ -26,12 +26,14 @@ import { resolveClaudeSessionPath } from "./lib/claude-session-transfer.mjs";
 import { sendBrokerShutdown } from "./lib/broker-lifecycle.mjs";
 import { readStdinIfPiped } from "./lib/fs.mjs";
 import { collectReviewContext, createCodexWorktree, ensureGitRepository, resolveReviewTarget } from "./lib/git.mjs";
-import { binaryAvailable, terminateProcessTree } from "./lib/process.mjs";
+import { binaryAvailable, isProcessAlive, terminateProcessTree } from "./lib/process.mjs";
 import { loadPromptTemplate, interpolateTemplate } from "./lib/prompts.mjs";
 import {
   generateJobId,
   getConfig,
   listJobs,
+  readJobFile,
+  resolveJobFileGlobally,
   setConfig,
   upsertJob,
   writeJobFile
@@ -39,6 +41,7 @@ import {
 import {
   buildSingleJobSnapshot,
   buildStatusSnapshot,
+  reapOrphanedJobs,
   readStoredJob,
   resolveCancelableJob,
   resolveResultJob,
@@ -95,6 +98,10 @@ const DEFAULT_STATUS_WAIT_TIMEOUT_MS = 240000;
 const DEFAULT_STATUS_POLL_INTERVAL_MS = 2000;
 // `status --wait --timeout-ms 0` means "wait until the job finishes", bounded by this safety cap.
 const UNBOUNDED_STATUS_WAIT_TIMEOUT_MS = 21600000;
+const WAIT_STAT_FALLBACK_MS = 2000;
+// A dead worker never touches its job file again, so `wait` must pid-check
+// periodically and reap, or it hangs to timeout on orphaned jobs.
+const WAIT_REAP_INTERVAL_MS = 5000;
 const VALID_REASONING_EFFORTS = new Set(["none", "minimal", "low", "medium", "high", "xhigh"]);
 const MODEL_ALIASES = new Map([["spark", "gpt-5.3-codex-spark"]]);
 const SANDBOX_ALIASES = new Map([
@@ -118,6 +125,7 @@ function printUsage() {
       "  node scripts/codex-companion.mjs task [--background] [--write|--full|--sandbox <mode>] [--worktree|--worktree-name <name>] [--goal <objective>] [--goal-budget <tokens>] [--resume-last|--resume|--fresh] [--model <model|spark>] [--effort <none|minimal|low|medium|high|xhigh>] [prompt]",
       "  node scripts/codex-companion.mjs transfer [--source <claude-jsonl>] [--json]",
       "  node scripts/codex-companion.mjs status [job-id] [--all] [--wait] [--timeout-ms <ms, 0 = until done>] [--poll-interval-ms <ms>] [--json]",
+      "  node scripts/codex-companion.mjs wait <job-id> [--timeout <seconds>]",
       "  node scripts/codex-companion.mjs result [job-id] [--full|--max-chars <n>] [--json]",
       "  node scripts/codex-companion.mjs cancel [job-id] [--json]",
       "  node scripts/codex-companion.mjs steer <job-id> -- <short corrective instruction>",
@@ -229,6 +237,10 @@ function parseCommandInput(argv, config = {}) {
       ...(config.aliasMap ?? {})
     }
   });
+}
+
+function hasHelpFlag(argv) {
+  return argv.includes("-h") || argv.includes("--help");
 }
 
 function resolveCommandCwd(options = {}) {
@@ -384,7 +396,7 @@ function renderStatusPayload(report, asJson) {
 }
 
 function isActiveJobStatus(status) {
-  return status === "queued" || status === "running";
+  return status === "queued" || status === "pending" || status === "running";
 }
 
 function getCurrentClaudeSessionId() {
@@ -432,6 +444,111 @@ async function waitForSingleJobSnapshot(cwd, reference, options = {}) {
     waitTimedOut: isActiveJobStatus(snapshot.job.status),
     timeoutMs
   };
+}
+
+function readWaitStatus(jobFile) {
+  return readJobFile(jobFile).status ?? "unknown";
+}
+
+async function waitForGlobalJob(cwd, jobId, options = {}) {
+  const workspaceRoot = resolveWorkspaceRoot(cwd);
+  const resolved = resolveJobFileGlobally(workspaceRoot, jobId);
+  if (!resolved) {
+    return { found: false, status: null, timedOut: false };
+  }
+
+  const jobFile = resolved.jobFile;
+  let status = readWaitStatus(jobFile);
+  if (!isActiveJobStatus(status)) {
+    return { found: true, status, timedOut: false };
+  }
+
+  const timeoutSeconds = options.timeoutSeconds == null ? null : Number(options.timeoutSeconds);
+  const timeoutMs = timeoutSeconds == null ? null : Math.max(0, timeoutSeconds * 1000);
+  const directory = path.dirname(jobFile);
+  const filename = path.basename(jobFile);
+
+  return new Promise((resolve) => {
+    let settled = false;
+    let lastMtimeMs = fs.statSync(jobFile).mtimeMs;
+    let watcher = null;
+    let pollTimer = null;
+    let reapTimer = null;
+    let timeoutTimer = null;
+
+    const cleanup = () => {
+      if (watcher) {
+        watcher.close();
+      }
+      if (pollTimer) {
+        clearInterval(pollTimer);
+      }
+      if (reapTimer) {
+        clearInterval(reapTimer);
+      }
+      if (timeoutTimer) {
+        clearTimeout(timeoutTimer);
+      }
+    };
+
+    const finish = (payload) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      resolve(payload);
+    };
+
+    const check = () => {
+      try {
+        const stat = fs.statSync(jobFile);
+        if (stat.mtimeMs === lastMtimeMs && isActiveJobStatus(status)) {
+          return;
+        }
+        lastMtimeMs = stat.mtimeMs;
+        status = readWaitStatus(jobFile);
+        if (!isActiveJobStatus(status)) {
+          finish({ found: true, status, timedOut: false });
+        }
+      } catch {
+        // Atomic rename can briefly race readers on some filesystems.
+      }
+    };
+
+    try {
+      watcher = fs.watch(directory, (eventType, changedName) => {
+        if (!changedName || changedName === filename) {
+          check();
+        }
+      });
+      watcher.on("error", () => {
+        watcher?.close();
+        watcher = null;
+      });
+    } catch {
+      watcher = null;
+    }
+
+    const reapCheck = () => {
+      try {
+        const job = readJobFile(jobFile);
+        if (isActiveJobStatus(job.status ?? "unknown") && isProcessAlive(job.pid) === false) {
+          reapOrphanedJobs(job.workspaceRoot ?? workspaceRoot, [job]);
+          check();
+        }
+      } catch {
+        // Job file mid-rename; the next tick retries.
+      }
+    };
+
+    pollTimer = setInterval(check, WAIT_STAT_FALLBACK_MS);
+    reapTimer = setInterval(reapCheck, WAIT_REAP_INTERVAL_MS);
+    if (timeoutMs != null) {
+      timeoutTimer = setTimeout(() => finish({ found: true, status, timedOut: true }), timeoutMs);
+    }
+    check();
+  });
 }
 
 async function resolveLatestTrackedTaskThread(cwd, options = {}) {
@@ -796,12 +913,16 @@ function buildTaskRequest({ cwd, workspaceRoot = null, model, effort, prompt, wr
   };
 }
 
-function resolveGoalOption(options) {
-  if (!options.goal) {
+function resolveGoalOption(cwd, options) {
+  if (options.goal && options["goal-file"]) {
+    throw new Error("Choose either --goal or --goal-file, not both.");
+  }
+  const objective = options["goal-file"] ? fs.readFileSync(path.resolve(cwd, options["goal-file"]), "utf8") : options.goal;
+  if (!objective) {
     return null;
   }
   return {
-    objective: validateGoalObjective(options.goal),
+    objective: validateGoalObjective(objective),
     tokenBudget: options["goal-budget"] != null ? Number(options["goal-budget"]) : null
   };
 }
@@ -834,6 +955,10 @@ async function executeTransfer(cwd, options = {}) {
 }
 
 function readTaskPrompt(cwd, options, positionals) {
+  if (options["prompt-stdin"]) {
+    return readStdinIfPiped().trim();
+  }
+
   if (options["prompt-file"]) {
     return fs.readFileSync(path.resolve(cwd, options["prompt-file"]), "utf8");
   }
@@ -912,6 +1037,20 @@ function buildStatusWaitHint(jobId) {
   return `node "${script}" status ${jobId} --wait --timeout-ms 0 --json`;
 }
 
+function buildReviewRequest({ cwd, workspaceRoot, base, scope, model, focusText, reviewName, jobId }) {
+  return {
+    kind: "review",
+    cwd,
+    workspaceRoot,
+    base,
+    scope,
+    model,
+    focusText,
+    reviewName,
+    jobId
+  };
+}
+
 async function handleReviewCommand(argv, config) {
   const { options, positionals } = parseCommandInput(argv, {
     valueOptions: ["base", "scope", "model", "cwd"],
@@ -924,6 +1063,34 @@ async function handleReviewCommand(argv, config) {
   const cwd = resolveCommandCwd(options);
   const workspaceRoot = resolveCommandWorkspace(options);
   const focusText = positionals.join(" ").trim();
+
+  if (options.background) {
+    ensureCodexAvailable(cwd);
+    ensureGitRepository(cwd);
+    const metadata = buildReviewJobMetadata(config.reviewName, { label: options.scope ?? "auto" });
+    const job = createCompanionJob({
+      prefix: "review",
+      kind: metadata.kind,
+      title: metadata.title,
+      workspaceRoot,
+      jobClass: "review",
+      summary: `${config.reviewName} queued`
+    });
+    const request = buildReviewRequest({
+      cwd,
+      workspaceRoot,
+      base: options.base,
+      scope: options.scope,
+      model: options.model,
+      focusText,
+      reviewName: config.reviewName,
+      jobId: job.id
+    });
+    const { payload } = enqueueBackgroundTask(cwd, job, request);
+    outputCommandResult(payload, renderQueuedTaskLaunch(payload), options.json);
+    return;
+  }
+
   const target = resolveReviewTarget(cwd, {
     base: options.base,
     scope: options.scope
@@ -966,8 +1133,8 @@ async function handleReview(argv) {
 
 async function handleTask(argv) {
   const { options, positionals } = parseCommandInput(argv, {
-    valueOptions: ["model", "effort", "cwd", "prompt-file", "sandbox", "worktree-name", "goal", "goal-budget"],
-    booleanOptions: ["json", "write", "full", "worktree", "resume-last", "resume", "fresh", "background"],
+    valueOptions: ["model", "effort", "cwd", "prompt-file", "sandbox", "worktree-name", "goal", "goal-file", "goal-budget"],
+    booleanOptions: ["json", "write", "full", "worktree", "resume-last", "resume", "fresh", "background", "prompt-stdin"],
     aliasMap: {
       m: "model"
     }
@@ -1004,7 +1171,7 @@ async function handleTask(argv) {
     write,
     sandbox,
     worktree: worktreeSetup.worktree,
-    goal: resolveGoalOption(options),
+    goal: resolveGoalOption(cwd, options),
     resumeLast,
     jobId: job.id
   });
@@ -1076,11 +1243,18 @@ async function handleTaskWorker(argv) {
       workspaceRoot,
       logFile
     },
-    () =>
-      executeTaskRun({
+    () => {
+      if (request.kind === "review") {
+        return executeReviewRun({
+          ...request,
+          onProgress: progress
+        });
+      }
+      return executeTaskRun({
         ...request,
         onProgress: progress
-      }),
+      });
+    },
     { logFile }
   );
 }
@@ -1112,6 +1286,33 @@ async function handleStatus(argv) {
   outputResult(renderStatusPayload(report, options.json), options.json);
 }
 
+async function handleWait(argv) {
+  const { options, positionals } = parseCommandInput(argv, {
+    valueOptions: ["cwd", "timeout"]
+  });
+
+  const cwd = resolveCommandCwd(options);
+  const jobId = positionals[0] ?? "";
+  if (!jobId) {
+    throw new Error("Usage: wait <job-id> [--timeout <seconds>].");
+  }
+
+  const result = await waitForGlobalJob(cwd, jobId, {
+    timeoutSeconds: options.timeout
+  });
+  if (!result.found) {
+    process.stderr.write(`No job found for "${jobId}".\n`);
+    process.exitCode = 1;
+    return;
+  }
+  if (result.timedOut) {
+    process.stderr.write(`Timed out waiting for ${jobId}; last status: ${result.status}\n`);
+    process.exitCode = 2;
+    return;
+  }
+  process.stdout.write(`final status: ${result.status}\n`);
+}
+
 const DEFAULT_RESULT_MAX_CHARS = 8000;
 
 function handleResult(argv) {
@@ -1122,8 +1323,8 @@ function handleResult(argv) {
 
   const cwd = resolveCommandCwd(options);
   const reference = positionals[0] ?? "";
-  const { workspaceRoot, job } = resolveResultJob(cwd, reference);
-  const storedJob = readStoredJob(workspaceRoot, job.id);
+  const { workspaceRoot, job, storedJob: resolvedStoredJob = null } = resolveResultJob(cwd, reference);
+  const storedJob = resolvedStoredJob ?? readStoredJob(workspaceRoot, job.id);
   const payload = {
     job,
     storedJob
@@ -1181,8 +1382,8 @@ async function handleCancel(argv) {
 
   const cwd = resolveCommandCwd(options);
   const reference = positionals[0] ?? "";
-  const { workspaceRoot, job } = resolveCancelableJob(cwd, reference, { env: process.env });
-  const existing = readStoredJob(workspaceRoot, job.id) ?? {};
+  const { workspaceRoot, job, storedJob: resolvedStoredJob = null } = resolveCancelableJob(cwd, reference, { env: process.env });
+  const existing = resolvedStoredJob ?? readStoredJob(workspaceRoot, job.id) ?? {};
   const threadId = existing.threadId ?? job.threadId ?? null;
   const turnId = existing.turnId ?? job.turnId ?? null;
 
@@ -1420,7 +1621,7 @@ function handleArtifacts(argv) {
 
 async function handleContinue(argv) {
   const { options, positionals } = parseCommandInput(argv, {
-    valueOptions: ["model", "effort", "cwd", "sandbox", "worktree-name", "goal", "goal-budget"],
+    valueOptions: ["model", "effort", "cwd", "sandbox", "worktree-name", "goal", "goal-file", "goal-budget"],
     booleanOptions: ["json", "write", "full", "worktree", "background", "prompt-stdin"],
     aliasMap: {
       m: "model"
@@ -1456,7 +1657,7 @@ async function handleContinue(argv) {
     write,
     sandbox,
     worktree: worktreeSetup.worktree,
-    goal: resolveGoalOption(options),
+    goal: resolveGoalOption(cwd, options),
     resumeLast: false,
     resumeThreadId: threadId,
     jobId: job.id
@@ -1486,6 +1687,10 @@ async function main() {
     printUsage();
     return;
   }
+  if (subcommand === "-h" || hasHelpFlag(argv)) {
+    printUsage();
+    return;
+  }
 
   switch (subcommand) {
     case "setup":
@@ -1510,6 +1715,9 @@ async function main() {
       break;
     case "status":
       await handleStatus(argv);
+      break;
+    case "wait":
+      await handleWait(argv);
       break;
     case "result":
       handleResult(argv);

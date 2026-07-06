@@ -1050,7 +1050,7 @@ test("adversarial review rejects staged-only scope to match review target select
   assert.match(result.stderr, /Use one of: auto, working-tree, branch, or pass --base <ref>/i);
 });
 
-test("review accepts --background while still running as a tracked review job", () => {
+test("review --background returns a tracked review job id promptly", () => {
   const repo = makeTempDir();
   const binDir = makeTempDir();
   installFakeCodex(binDir);
@@ -1060,15 +1060,20 @@ test("review accepts --background while still running as a tracked review job", 
   run("git", ["commit", "-m", "init"], { cwd: repo });
   fs.writeFileSync(path.join(repo, "README.md"), "hello again\n");
 
+  const start = Date.now();
   const launched = run("node", [SCRIPT, "review", "--background", "--json"], {
     cwd: repo,
     env: buildEnv(binDir)
   });
+  const elapsedMs = Date.now() - start;
 
   assert.equal(launched.status, 0, launched.stderr);
+  assert.ok(elapsedMs < 5000, `expected prompt detach, took ${elapsedMs}ms`);
   const launchPayload = JSON.parse(launched.stdout);
-  assert.equal(launchPayload.review, "Review");
-  assert.match(launchPayload.codex.stdout, /No material issues found/);
+  assert.match(launchPayload.jobId, /^review-/);
+  const stored = JSON.parse(fs.readFileSync(path.join(resolveStateDir(repo), "jobs", `${launchPayload.jobId}.json`), "utf8"));
+  assert.equal(stored.jobClass, "review");
+  assert.equal(stored.request.reviewName, "Review");
 
   const status = run("node", [SCRIPT, "status"], {
     cwd: repo,
@@ -1078,7 +1083,7 @@ test("review accepts --background while still running as a tracked review job", 
   assert.equal(status.status, 0, status.stderr);
   assert.match(status.stdout, /# Codex Status/);
   assert.match(status.stdout, /Codex Review/);
-  assert.match(status.stdout, /completed/);
+  assert.match(status.stdout, /queued|running|completed/);
 });
 
 test("status shows phases, hints, and the latest finished job", () => {

@@ -7,7 +7,7 @@ import { resolveWorkspaceRoot } from "./workspace.mjs";
 
 const STATE_VERSION = 1;
 const PLUGIN_DATA_ENV = "CLAUDE_PLUGIN_DATA";
-const FALLBACK_STATE_ROOT_DIR = path.join(os.tmpdir(), "codex-companion");
+let fallbackStateRootDir = null;
 const STATE_FILE_NAME = "state.json";
 const JOBS_DIR_NAME = "jobs";
 const MAX_JOBS = 50;
@@ -35,12 +35,28 @@ export function resolveStateDir(cwd) {
     canonicalWorkspaceRoot = workspaceRoot;
   }
 
-  const slugSource = path.basename(workspaceRoot) || "workspace";
+  const slugSource = path.basename(canonicalWorkspaceRoot) || path.basename(workspaceRoot) || "workspace";
   const slug = slugSource.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "workspace";
   const hash = createHash("sha256").update(canonicalWorkspaceRoot).digest("hex").slice(0, 16);
+  return path.join(resolveStateRoot(), `${slug}-${hash}`);
+}
+
+export function resolveStateRoot() {
   const pluginDataDir = process.env[PLUGIN_DATA_ENV];
-  const stateRoot = pluginDataDir ? path.join(pluginDataDir, "state") : FALLBACK_STATE_ROOT_DIR;
-  return path.join(stateRoot, `${slug}-${hash}`);
+  if (pluginDataDir) {
+    return path.join(pluginDataDir, "state");
+  }
+  if (!fallbackStateRootDir) {
+    const tmpDir = os.tmpdir();
+    let canonicalTmpDir = tmpDir;
+    try {
+      canonicalTmpDir = fs.realpathSync.native(tmpDir);
+    } catch {
+      canonicalTmpDir = tmpDir;
+    }
+    fallbackStateRootDir = path.join(canonicalTmpDir, "codex-companion");
+  }
+  return fallbackStateRootDir;
 }
 
 export function resolveStateFile(cwd) {
@@ -239,6 +255,45 @@ export function writeJobFile(cwd, jobId, payload) {
 
 export function readJobFile(jobFile) {
   return JSON.parse(fs.readFileSync(jobFile, "utf8"));
+}
+
+function listStateDirs() {
+  const stateRoot = resolveStateRoot();
+  if (!fs.existsSync(stateRoot)) {
+    return [];
+  }
+  return fs
+    .readdirSync(stateRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => path.join(stateRoot, entry.name));
+}
+
+function findJobInStateDir(stateDir, jobId) {
+  const jobFile = path.join(stateDir, JOBS_DIR_NAME, `${jobId}.json`);
+  if (!fs.existsSync(jobFile)) {
+    return null;
+  }
+  try {
+    return { stateDir, jobFile, job: readJobFile(jobFile) };
+  } catch {
+    return null;
+  }
+}
+
+export function resolveJobFileGlobally(cwd, jobId) {
+  const current = findJobInStateDir(resolveStateDir(cwd), jobId);
+  if (current) {
+    return current;
+  }
+
+  for (const stateDir of listStateDirs()) {
+    const match = findJobInStateDir(stateDir, jobId);
+    if (match) {
+      return match;
+    }
+  }
+
+  return null;
 }
 
 function removeJobFile(jobFile) {

@@ -10,10 +10,11 @@ import { resolveJobFile, resolveJobLogFile, resolveStateDir, resolveStateFile, s
 test("resolveStateDir uses a temp-backed per-workspace directory", () => {
   const workspace = makeTempDir();
   const stateDir = resolveStateDir(workspace);
+  const canonicalTmpDir = fs.realpathSync.native(os.tmpdir());
 
-  assert.equal(stateDir.startsWith(os.tmpdir()), true);
+  assert.equal(stateDir.startsWith(canonicalTmpDir), true);
   assert.match(path.basename(stateDir), /.+-[a-f0-9]{16}$/);
-  assert.match(stateDir, new RegExp(`^${os.tmpdir().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+  assert.match(stateDir, new RegExp(`^${canonicalTmpDir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
 });
 
 test("resolveStateDir uses CLAUDE_PLUGIN_DATA when it is provided", () => {
