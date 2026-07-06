@@ -14,7 +14,7 @@ import process from "node:process";
 import { BROKER_BUSY_RPC_CODE, CodexAppServerClient } from "./app-server.mts";
 import { requestThreadGoal, steerAppServerTurn } from "./codex.mts";
 import { listJobs, readJobFile, resolveJobFile, resolveJobFileGlobally, updateState, upsertJob, writeJobFile } from "./state.mts";
-import type { JobFilePayload } from "./state.mts";
+import type { JobFilePayload, JobRecord } from "./state.mts";
 import { enrichJob, reapOrphanedJobs, sortJobsNewestFirst } from "./job-control.mts";
 import { isProcessAlive } from "./process.mts";
 import { appendLogLine, SESSION_ID_ENV } from "./tracked-jobs.mts";
@@ -44,6 +44,56 @@ const GOAL_ALERT_STATUSES = new Set(["blocked", "usageLimited", "budgetLimited"]
 
 export const GOAL_OBJECTIVE_MAX_CHARS = 4000;
 export const ARTIFACTS_DIR_NAME = ".codex-artifacts";
+
+interface SetGoalOptions {
+  status?: string;
+  tokenBudget?: number | null;
+}
+
+interface ListThreadsCompactOptions {
+  limit?: number | string;
+  cursor?: string | null;
+  all?: boolean;
+  search?: string | null;
+}
+
+interface ListTurnsCompactOptions {
+  threadId: string;
+  limit?: number | string;
+  cursor?: string | null;
+}
+
+interface ListItemsCompactOptions {
+  threadId: string;
+  turnId?: string | null;
+  limit?: number | string;
+  budgetChars?: number | string;
+  cursor?: string | null;
+  types?: string[];
+}
+
+interface TailJobLogOptions {
+  lines?: number | string;
+}
+
+interface ListJobArtifactsOptions {
+  limit?: number | string;
+}
+
+interface ReconcileCompletedTurnJobsOptions {
+  quietMs?: number | string;
+  now?: number;
+}
+
+interface BuildJobAlertsOptions {
+  now?: number;
+  stallSeconds?: number | string;
+}
+
+interface BuildAlertsSnapshotOptions extends BuildJobAlertsOptions, ReconcileCompletedTurnJobsOptions {
+  reconcileTurns?: boolean;
+  checkGoals?: boolean;
+}
 
 function shorten(text, limit = 96) {
   const normalized = String(text ?? "").trim().replace(/\s+/g, " ");
@@ -282,7 +332,7 @@ function compactGoal(goal) {
   };
 }
 
-export async function setGoal(cwd, reference, objective, options: any = {}) {
+export async function setGoal(cwd, reference, objective, options: SetGoalOptions = {}) {
   const normalized = validateGoalObjective(objective);
   const target = resolveGoalTarget(cwd, reference);
   const response = await requestThreadGoal(
@@ -453,7 +503,7 @@ function compactItem(item, textLimit = 400) {
 
 function compactTurn(turn) {
   const items = turn.items ?? [];
-  const itemCounts: any = {};
+  const itemCounts: Record<string, number> = {};
   for (const item of items) {
     itemCounts[item.type] = (itemCounts[item.type] ?? 0) + 1;
   }
@@ -474,7 +524,7 @@ function compactTurn(turn) {
   };
 }
 
-export async function listThreadsCompact(cwd, options: any = {}) {
+export async function listThreadsCompact(cwd, options: ListThreadsCompactOptions = {}) {
   const workspaceRoot = resolveWorkspaceRoot(cwd);
   const limit = Math.max(1, Math.min(Number(options.limit) || DEFAULT_THREADS_LIMIT, 50));
 
@@ -539,7 +589,7 @@ async function fetchTurnPages(client, threadId, { cursor = null, limit = TURNS_P
   return { turns, nextCursor, usedFallback };
 }
 
-export async function listTurnsCompact(cwd, options: any = {}) {
+export async function listTurnsCompact(cwd, options: ListTurnsCompactOptions) {
   const workspaceRoot = resolveWorkspaceRoot(cwd);
   const limit = Math.max(1, Math.min(Number(options.limit) || DEFAULT_TURNS_LIMIT, 50));
 
@@ -558,7 +608,7 @@ export async function listTurnsCompact(cwd, options: any = {}) {
   });
 }
 
-export async function listItemsCompact(cwd, options: any = {}) {
+export async function listItemsCompact(cwd, options: ListItemsCompactOptions) {
   const workspaceRoot = resolveWorkspaceRoot(cwd);
   const limit = Math.max(1, Math.min(Number(options.limit) || DEFAULT_ITEMS_LIMIT, 100));
   const budgetChars = Math.max(500, Number(options.budgetChars) || DEFAULT_ITEMS_BUDGET_CHARS);
@@ -708,7 +758,7 @@ export function renderItemList(payload) {
 
 // --- tail -----------------------------------------------------------------
 
-export function tailJobLog(cwd, reference, options: any = {}) {
+export function tailJobLog(cwd, reference, options: TailJobLogOptions = {}) {
   const workspaceRoot = resolveWorkspaceRoot(cwd);
   const jobs = sortJobsNewestFirst(listJobs(workspaceRoot));
   const globalMatch = reference ? resolveJobFileGlobally(workspaceRoot, reference) : null;
@@ -766,7 +816,7 @@ function walkArtifactFiles(dir, baseDir, collected, limit) {
  * Purely local; the brief convention tells Codex to save screenshots and
  * evidence there so the controller can Read individual files on demand.
  */
-export function listJobArtifacts(cwd, reference = "", options: any = {}) {
+export function listJobArtifacts(cwd, reference = "", options: ListJobArtifactsOptions = {}) {
   const workspaceRoot = resolveWorkspaceRoot(cwd);
   const jobs = sortJobsNewestFirst(listJobs(workspaceRoot));
   const globalMatch = reference ? resolveJobFileGlobally(workspaceRoot, reference) : null;
@@ -886,7 +936,7 @@ function finalizeReconciledJob(workspaceRoot, job, latestTurn, status, lastAgent
  * job instead of waiting on a worker that will never write again.
  * Returns descriptors of the jobs it reconciled.
  */
-export async function reconcileCompletedTurnJobs(cwd, jobs, options: any = {}) {
+export async function reconcileCompletedTurnJobs(cwd, jobs: JobRecord[], options: ReconcileCompletedTurnJobsOptions = {}) {
   const envQuietMs = Number(process.env.CODEX_COMPANION_RECONCILE_QUIET_MS);
   const quietMs =
     Number.isFinite(envQuietMs) && envQuietMs > 0
@@ -928,7 +978,7 @@ export async function reconcileCompletedTurnJobs(cwd, jobs, options: any = {}) {
       // must have started at or after the job did (a resumed thread's stale
       // last turn must not complete a job whose own turn never started).
       const turnEndedMs = (outcome.completedAt ?? outcome.startedAt ?? 0) * 1000;
-      const jobStartedMs = Date.parse(job.startedAt ?? job.createdAt ?? "") || 0;
+      const jobStartedMs = Date.parse(String(job.startedAt ?? job.createdAt ?? "")) || 0;
       if (turnEndedMs && jobStartedMs && turnEndedMs < jobStartedMs - 5000) {
         continue;
       }
@@ -959,7 +1009,7 @@ function stripLogTimestamp(line) {
   return line.replace(/^\[[^\]]+\]\s*/, "");
 }
 
-export function buildJobAlerts(job, options: any = {}) {
+export function buildJobAlerts(job: JobRecord, options: BuildJobAlertsOptions = {}) {
   const now = options.now ?? Date.now();
   const stallSeconds = Math.max(30, Number(options.stallSeconds) || DEFAULT_STALL_SECONDS);
   const alerts = [];
@@ -999,7 +1049,9 @@ export function buildJobAlerts(job, options: any = {}) {
   // out), so a long-running command or reasoning stretch is quiet. Anchor
   // everything on the timestamp prefix to avoid matching command text.
   const strippedLines = logLines.filter((line) => parseLogTimestamp(line) != null).map(stripLogTimestamp);
-  const lastTimestamp = logLines.map(parseLogTimestamp).filter(Boolean).at(-1) ?? Date.parse(job.startedAt ?? job.createdAt ?? "");
+  const lastTimestamp =
+    logLines.map(parseLogTimestamp).filter((value): value is number => value != null).at(-1) ??
+    Date.parse(String(job.startedAt ?? job.createdAt ?? ""));
   // Native review turns emit no item events but the worker logs a heartbeat
   // every 60s, so silence there means "worker wedged", not "review thinking".
   // Alert on missed heartbeats (a much tighter threshold) instead of the
@@ -1050,7 +1102,7 @@ export function buildJobAlerts(job, options: any = {}) {
     });
   }
 
-  const startedAt = Date.parse(job.startedAt ?? job.createdAt ?? "");
+  const startedAt = Date.parse(String(job.startedAt ?? job.createdAt ?? ""));
   if (Number.isFinite(startedAt) && now - startedAt > LONG_RUNNING_SECONDS * 1000) {
     alerts.push({
       jobId: job.id,
@@ -1091,12 +1143,12 @@ async function collectGoalAlerts(cwd, jobs) {
   return { alerts, checkErrors };
 }
 
-export async function buildAlertsSnapshot(cwd, reference = "", options: any = {}) {
+export async function buildAlertsSnapshot(cwd, reference = "", options: BuildAlertsSnapshotOptions = {}) {
   const workspaceRoot = resolveWorkspaceRoot(cwd);
   // Reap dead workers before building alerts so an orphan surfaces as a
   // terminal "failed" alert (and status pollers stop waiting on it) instead
   // of an advisory on a job that still claims to be running.
-  let jobs = sortJobsNewestFirst(reapOrphanedJobs(workspaceRoot, listJobs(workspaceRoot), options));
+  let jobs = sortJobsNewestFirst(reapOrphanedJobs(workspaceRoot, listJobs(workspaceRoot)));
 
   // Alive-but-hung workers: finalize running jobs whose thread already shows
   // a terminal latest turn, and surface each as a precise alert instead of a

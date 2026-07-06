@@ -49,6 +49,9 @@ export interface JobRecord {
   turnId?: string | null;
   sessionId?: string | null;
   logFile?: string | null;
+  runCwd?: string | null;
+  brokerEndpoint?: string | null;
+  brokerTransport?: "shared" | "dedicated" | "direct" | "closed" | string | null;
   worktree?: JobWorktreeInfo | null;
   progress?: string[];
   reasoningSummary?: string[];
@@ -81,7 +84,7 @@ export type JobFilePayload = Partial<JobRecord> & {
 export interface GlobalJobMatch {
   stateDir: string;
   jobFile: string;
-  job: JobFilePayload;
+  job: JobRecord;
 }
 
 function nowIso() {
@@ -346,7 +349,8 @@ function findJobInStateDir(stateDir: string, jobId: string): GlobalJobMatch | nu
     return null;
   }
   try {
-    return { stateDir, jobFile, job: readJobFile(jobFile) };
+    const job = readJobFile(jobFile);
+    return typeof job.id === "string" ? { stateDir, jobFile, job: job as JobRecord } : null;
   } catch {
     return null;
   }

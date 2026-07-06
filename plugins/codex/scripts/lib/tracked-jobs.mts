@@ -2,9 +2,27 @@ import fs from "node:fs";
 import process from "node:process";
 
 import { readJobFile, resolveJobFile, resolveJobLogFile, upsertJob, writeJobFile } from "./state.mts";
-import type { JobPatch } from "./state.mts";
+import type { JobPatch, JobRecord } from "./state.mts";
 
 export const SESSION_ID_ENV = "CODEX_COMPANION_SESSION_ID";
+
+interface CreateJobRecordOptions {
+  env?: NodeJS.ProcessEnv;
+  sessionIdEnv?: string;
+}
+
+interface TrackedJobExecution {
+  exitStatus: number;
+  threadId?: string | null;
+  turnId?: string | null;
+  payload?: unknown;
+  rendered?: string;
+  summary?: string;
+}
+
+interface RunTrackedJobOptions {
+  logFile?: string | null;
+}
 
 export function nowIso() {
   return new Date().toISOString();
@@ -58,7 +76,7 @@ export function createJobLogFile(workspaceRoot, jobId, title) {
   return logFile;
 }
 
-export function createJobRecord(base, options: any = {}) {
+export function createJobRecord(base: JobRecord, options: CreateJobRecordOptions = {}) {
   const env = options.env ?? process.env;
   const sessionId = env[options.sessionIdEnv ?? SESSION_ID_ENV];
   return {
@@ -140,7 +158,7 @@ function readStoredJobOrNull(workspaceRoot, jobId) {
   return readJobFile(jobFile);
 }
 
-export async function runTrackedJob(job, runner, options: any = {}) {
+export async function runTrackedJob(job: JobRecord, runner: () => Promise<TrackedJobExecution>, options: RunTrackedJobOptions = {}) {
   const runningRecord = {
     ...job,
     status: "running",

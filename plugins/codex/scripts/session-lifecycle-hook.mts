@@ -66,10 +66,10 @@ async function cleanupSessionJobs(cwd, sessionId) {
     } catch {
       // Ignore teardown failures during session shutdown.
     }
-    if (job.brokerTransport === "dedicated" && job.brokerEndpoint) {
+    if (job.brokerTransport === "dedicated" && typeof job.brokerEndpoint === "string") {
       await sendBrokerShutdown(job.brokerEndpoint).catch(() => {});
     }
-    if (job.worktree && job.runCwd) {
+    if (job.worktree && typeof job.runCwd === "string") {
       const worktreeBroker = loadBrokerSession(job.runCwd);
       if (worktreeBroker) {
         await sendBrokerShutdown(worktreeBroker.endpoint).catch(() => {});
@@ -100,7 +100,9 @@ async function handleSessionEnd(input) {
       ? {
           endpoint: process.env[BROKER_ENDPOINT_ENV],
           pidFile: process.env[PID_FILE_ENV] ?? null,
-          logFile: process.env[LOG_FILE_ENV] ?? null
+          logFile: process.env[LOG_FILE_ENV] ?? null,
+          sessionDir: null,
+          pid: null
         }
       : null);
   const brokerEndpoint = brokerSession?.endpoint ?? null;

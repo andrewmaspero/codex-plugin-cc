@@ -8,6 +8,8 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 
 import { parseArgs, splitRawArgumentString } from "./lib/args.mts";
+import type { ParseArgsConfig } from "./lib/args.mts";
+import type { ReviewTarget } from "./lib/app-server-protocol.d.ts";
 import {
     buildPersistentTaskThreadName,
     DEFAULT_CONTINUE_PROMPT,
@@ -48,6 +50,7 @@ import {
   upsertJob,
   writeJobFile
 } from "./lib/state.mts";
+import type { JobRecord } from "./lib/state.mts";
 import {
   buildSingleJobSnapshot,
   buildStatusSnapshot,
@@ -130,6 +133,53 @@ const SANDBOX_ALIASES = new Map([
   ["danger", "danger-full-access"]
 ]);
 const STOP_REVIEW_TASK_MARKER = "Run a stop-gate review of the previous Claude turn.";
+
+type CommandOptions = Record<string, string | boolean>;
+type ProgressReporter = ReturnType<typeof createProgressReporter>;
+
+interface WaitForSingleJobSnapshotOptions {
+  timeoutMs?: number | string | boolean;
+  pollIntervalMs?: number | string | boolean;
+}
+
+interface WaitForGlobalJobOptions {
+  timeoutSeconds?: number | string | boolean | null;
+}
+
+interface ResolveLatestTrackedTaskThreadOptions {
+  excludeJobId?: string | null;
+}
+
+interface TrackedProgressOptions {
+  logFile?: string | null;
+  stderr?: boolean;
+}
+
+interface TaskRunMetadata {
+  title: string;
+  summary: string;
+}
+
+interface TaskJobExecutionOptions {
+  write?: boolean;
+  sandbox?: string | null;
+}
+
+interface TransferOptions {
+  source?: string;
+}
+
+interface ForegroundCommandOptions {
+  json?: boolean;
+  logFile?: string | null;
+}
+
+interface ForegroundCommandExecution {
+  exitStatus: number;
+  payload?: unknown;
+  rendered?: string;
+  [key: string]: unknown;
+}
 
 function printUsage() {
   console.log(
@@ -293,7 +343,15 @@ function normalizeArgv(argv) {
   return argv;
 }
 
-function parseCommandInput(argv, config: any = {}) {
+function optionString(value: string | boolean | undefined): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function optionStringOrNumber(value: string | boolean | undefined): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function parseCommandInput(argv, config: ParseArgsConfig = {}) {
   return parseArgs(normalizeArgv(argv), {
     ...config,
     // A mistyped flag silently became prompt text before (e.g. `--promt-stdin`
@@ -313,11 +371,11 @@ function hasHelpFlag(argv) {
   return argv.includes("-h") || argv.includes("--help");
 }
 
-function resolveCommandCwd(options: any = {}) {
-  return options.cwd ? path.resolve(process.cwd(), options.cwd) : process.cwd();
+function resolveCommandCwd(options: CommandOptions = {}) {
+  return typeof options.cwd === "string" ? path.resolve(process.cwd(), options.cwd) : process.cwd();
 }
 
-function resolveCommandWorkspace(options: any = {}) {
+function resolveCommandWorkspace(options: CommandOptions = {}) {
   return resolveWorkspaceRoot(resolveCommandCwd(options));
 }
 
@@ -437,7 +495,7 @@ function ensureCodexAvailable(cwd) {
   }
 }
 
-function buildNativeReviewTarget(target) {
+function buildNativeReviewTarget(target): ReviewTarget | null {
   if (target.mode === "working-tree") {
     return { type: "uncommittedChanges" };
   }
@@ -496,7 +554,7 @@ function findLatestResumableTaskJob(jobs) {
   );
 }
 
-async function waitForSingleJobSnapshot(cwd, reference, options: any = {}) {
+async function waitForSingleJobSnapshot(cwd, reference, options: WaitForSingleJobSnapshotOptions = {}) {
   const rawTimeoutMs = Number(options.timeoutMs);
   const timeoutMs = !Number.isFinite(rawTimeoutMs)
     ? DEFAULT_STATUS_WAIT_TIMEOUT_MS
@@ -542,7 +600,7 @@ interface StoredTaskWorkerRequest {
   [key: string]: unknown;
 }
 
-async function waitForGlobalJob(cwd, jobId, options: any = {}): Promise<WaitForGlobalJobResult> {
+async function waitForGlobalJob(cwd, jobId, options: WaitForGlobalJobOptions = {}): Promise<WaitForGlobalJobResult> {
   const workspaceRoot = resolveWorkspaceRoot(cwd);
   const resolved = resolveJobFileGlobally(workspaceRoot, jobId);
   if (!resolved) {
@@ -631,7 +689,9 @@ async function waitForGlobalJob(cwd, jobId, options: any = {}): Promise<WaitForG
           return;
         }
         if (isProcessAlive(job.pid) === false) {
-          reapOrphanedJobs(job.workspaceRoot ?? workspaceRoot, [job]);
+          if (typeof job.id === "string") {
+            reapOrphanedJobs(job.workspaceRoot ?? workspaceRoot, [job as JobRecord]);
+          }
           check();
           return;
         }
@@ -639,7 +699,10 @@ async function waitForGlobalJob(cwd, jobId, options: any = {}): Promise<WaitForG
         if (!turnReconcileInFlight && Date.now() - lastTurnReconcileAt >= WAIT_TURN_RECONCILE_INTERVAL_MS) {
           turnReconcileInFlight = true;
           lastTurnReconcileAt = Date.now();
-          reconcileCompletedTurnJobs(job.workspaceRoot ?? workspaceRoot, [job])
+          if (typeof job.id !== "string") {
+            return;
+          }
+          reconcileCompletedTurnJobs(job.workspaceRoot ?? workspaceRoot, [job as JobRecord])
             .catch(() => [])
             .finally(() => {
               turnReconcileInFlight = false;
@@ -660,7 +723,7 @@ async function waitForGlobalJob(cwd, jobId, options: any = {}): Promise<WaitForG
   });
 }
 
-async function resolveLatestTrackedTaskThread(cwd, options: any = {}) {
+async function resolveLatestTrackedTaskThread(cwd, options: ResolveLatestTrackedTaskThreadOptions = {}) {
   const workspaceRoot = resolveWorkspaceRoot(cwd);
   const sessionId = getCurrentClaudeSessionId();
   const jobs = sortJobsNewestFirst(listJobs(workspaceRoot)).filter((job) => job.id !== options.excludeJobId);
@@ -784,7 +847,7 @@ async function executeReviewRun(request) {
   });
   const parsed = parseStructuredOutput(result.finalMessage, {
     status: result.status,
-    failureMessage: result.error?.message ?? result.stderr
+    failureMessage: result.error instanceof Error ? result.error.message : result.stderr
   });
   const payload = {
     review: reviewName,
@@ -992,7 +1055,7 @@ function createCompanionJob({ prefix, kind, title, workspaceRoot, jobClass, summ
   });
 }
 
-function createTrackedProgress(job, options: any = {}) {
+function createTrackedProgress(job: JobRecord, options: TrackedProgressOptions = {}) {
   const logFile = options.logFile ?? createJobLogFile(job.workspaceRoot, job.id, job.title);
   return {
     logFile,
@@ -1004,7 +1067,7 @@ function createTrackedProgress(job, options: any = {}) {
   };
 }
 
-function buildTaskJob(workspaceRoot, taskMetadata, execution: any = {}) {
+function buildTaskJob(workspaceRoot, taskMetadata: TaskRunMetadata, execution: TaskJobExecutionOptions = {}) {
   return createCompanionJob({
     prefix: "task",
     kind: "task",
@@ -1075,7 +1138,7 @@ function renderTransferResult(payload) {
   return `${lines.join("\n")}\n`;
 }
 
-async function executeTransfer(cwd, options: any = {}) {
+async function executeTransfer(cwd, options: TransferOptions = {}) {
   const sourcePath = resolveClaudeSessionPath(cwd, {
     source: options.source
   });
@@ -1112,7 +1175,11 @@ function requireTaskRequest(prompt, resumeLast) {
   }
 }
 
-async function runForegroundCommand(job, runner, options: any = {}) {
+async function runForegroundCommand(
+  job: JobRecord,
+  runner: (progress: ProgressReporter) => Promise<ForegroundCommandExecution>,
+  options: ForegroundCommandOptions = {}
+) {
   const { logFile, progress } = createTrackedProgress(job, {
     logFile: options.logFile,
     stderr: !options.json
@@ -1247,8 +1314,8 @@ async function handleReviewCommand(argv, config) {
   }
 
   const target = resolveReviewTarget(cwd, {
-    base: options.base,
-    scope: options.scope
+    base: options.base == null ? null : String(options.base),
+    scope: options.scope == null ? undefined : String(options.scope)
   });
 
   config.validateRequest?.(target, focusText);
@@ -1275,7 +1342,7 @@ async function handleReviewCommand(argv, config) {
         reviewName: config.reviewName,
         onProgress: progress
       }),
-    { json: options.json }
+    { json: Boolean(options.json) }
   );
 }
 
@@ -1345,7 +1412,7 @@ async function handleTask(argv) {
         ...request,
         onProgress: progress
       }),
-    { json: options.json }
+    { json: Boolean(options.json) }
   );
 }
 
@@ -1357,9 +1424,9 @@ async function handleTransfer(argv) {
 
   const cwd = resolveCommandCwd(options);
   const { payload, rendered } = await executeTransfer(cwd, {
-    source: options.source
+    source: optionString(options.source)
   });
-  outputCommandResult(payload, rendered, options.json);
+  outputCommandResult(payload, rendered, Boolean(options.json));
 }
 
 /**
@@ -1436,7 +1503,7 @@ async function handleTaskWorker(argv) {
 
   const cwd = resolveCommandCwd(options);
   const workspaceRoot = resolveCommandWorkspace(options);
-  const storedJob = readStoredJob(workspaceRoot, options["job-id"]);
+  const storedJob = readStoredJob(workspaceRoot, String(options["job-id"]));
   if (!storedJob) {
     throw new Error(`No stored job found for ${options["job-id"]}.`);
   }
@@ -1512,7 +1579,7 @@ async function handleStatus(argv) {
     throw new Error("`status --wait` requires a job id.");
   }
 
-  const report = buildStatusSnapshot(cwd, { all: options.all });
+  const report = buildStatusSnapshot(cwd, { all: Boolean(options.all) });
   outputResult(renderStatusPayload(report, options.json), options.json);
 }
 
@@ -1613,7 +1680,7 @@ async function handleCancel(argv) {
   const cwd = resolveCommandCwd(options);
   const reference = positionals[0] ?? "";
   const { workspaceRoot, job, storedJob: resolvedStoredJob = null } = resolveCancelableJob(cwd, reference, { env: process.env });
-  const existing = resolvedStoredJob ?? readStoredJob(workspaceRoot, job.id) ?? {};
+  const existing: Partial<JobRecord> = resolvedStoredJob ?? readStoredJob(workspaceRoot, job.id) ?? {};
   const threadId = existing.threadId ?? job.threadId ?? null;
   const turnId = existing.turnId ?? job.turnId ?? null;
 
@@ -1702,9 +1769,9 @@ async function handleThreads(argv) {
 
   const cwd = resolveCommandCwd(options);
   const payload = await listThreadsCompact(cwd, {
-    limit: options.limit,
-    cursor: options.cursor,
-    search: options.search,
+    limit: optionStringOrNumber(options.limit),
+    cursor: optionString(options.cursor),
+    search: optionString(options.search),
     all: Boolean(options.all)
   });
   outputCommandResult(payload, renderThreadList(payload), options.json);
@@ -1740,8 +1807,8 @@ async function handleTurns(argv) {
   const cwd = resolveCommandCwd(options);
   const payload = await listTurnsCompact(cwd, {
     threadId,
-    limit: options.limit,
-    cursor: options.cursor
+    limit: optionStringOrNumber(options.limit),
+    cursor: optionString(options.cursor)
   });
   outputCommandResult(payload, renderTurnList(payload), options.json);
 }
@@ -1760,16 +1827,16 @@ async function handleItems(argv) {
   const cwd = resolveCommandCwd(options);
   const payload = await listItemsCompact(cwd, {
     threadId,
-    turnId: options.turn ?? null,
+    turnId: optionString(options.turn) ?? null,
     types: options.type
       ? String(options.type)
           .split(",")
           .map((value) => value.trim())
           .filter(Boolean)
-      : null,
-    limit: options.limit,
-    cursor: options.cursor ?? null,
-    budgetChars: options.budget
+      : undefined,
+    limit: optionStringOrNumber(options.limit),
+    cursor: optionString(options.cursor) ?? null,
+    budgetChars: optionStringOrNumber(options.budget)
   });
   outputCommandResult(payload, renderItemList(payload), options.json);
 }
@@ -1781,7 +1848,7 @@ function handleTail(argv) {
   });
 
   const cwd = resolveCommandCwd(options);
-  const payload = tailJobLog(cwd, positionals[0] ?? "", { lines: options.lines });
+  const payload = tailJobLog(cwd, positionals[0] ?? "", { lines: optionStringOrNumber(options.lines) });
   outputCommandResult(payload, renderTail(payload), options.json);
 }
 
@@ -1793,7 +1860,7 @@ async function handleAlerts(argv) {
 
   const cwd = resolveCommandCwd(options);
   const payload = await buildAlertsSnapshot(cwd, positionals[0] ?? "", {
-    stallSeconds: options["stall-seconds"],
+    stallSeconds: optionStringOrNumber(options["stall-seconds"]),
     checkGoals: !options["no-goals"]
   });
   outputCommandResult(payload, renderAlerts(payload), options.json);
@@ -1816,7 +1883,7 @@ async function handleGoal(argv) {
     const objective = options["objective-stdin"] ? readStdinIfPiped().trim() : objectiveParts.join(" ");
     const payload = await setGoal(cwd, reference ?? "", objective, {
       tokenBudget: options.budget != null ? Number(options.budget) : null,
-      status: options.status ?? "active"
+      status: optionString(options.status) ?? "active"
     });
     outputCommandResult(payload, renderGoalResult(payload), options.json);
     if (!payload.ok) {
@@ -1845,7 +1912,7 @@ function handleArtifacts(argv) {
   });
 
   const cwd = resolveCommandCwd(options);
-  const payload = listJobArtifacts(cwd, positionals[0] ?? "", { limit: options.limit });
+  const payload = listJobArtifacts(cwd, positionals[0] ?? "", { limit: optionStringOrNumber(options.limit) });
   outputCommandResult(payload, renderArtifacts(payload), options.json);
 }
 
@@ -1907,7 +1974,7 @@ async function handleContinue(argv) {
         ...request,
         onProgress: progress
       }),
-    { json: options.json }
+    { json: Boolean(options.json) }
   );
 }
 

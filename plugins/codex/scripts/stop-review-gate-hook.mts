@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { getCodexAvailability } from "./lib/codex.mts";
 import { loadPromptTemplate, interpolateTemplate } from "./lib/prompts.mts";
 import { getConfig, listJobs } from "./lib/state.mts";
+import type { JobRecord } from "./lib/state.mts";
 import { sortJobsNewestFirst } from "./lib/job-control.mts";
 import { SESSION_ID_ENV } from "./lib/tracked-jobs.mts";
 import { resolveWorkspaceRoot } from "./lib/workspace.mts";
@@ -17,6 +18,12 @@ const STOP_REVIEW_TIMEOUT_MS = 15 * 60 * 1000;
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const ROOT_DIR = path.resolve(SCRIPT_DIR, "..");
 const STOP_REVIEW_TASK_MARKER = "Run a stop-gate review of the previous Claude turn.";
+
+interface StopHookInput {
+  cwd?: string;
+  session_id?: string;
+  last_assistant_message?: string;
+}
 
 function readHookInput() {
   const raw = fs.readFileSync(0, "utf8").trim();
@@ -37,7 +44,7 @@ function logNote(message) {
   process.stderr.write(`${message}\n`);
 }
 
-function filterJobsForCurrentSession(jobs, input: any = {}) {
+function filterJobsForCurrentSession(jobs: JobRecord[], input: StopHookInput = {}) {
   const sessionId = input.session_id || process.env[SESSION_ID_ENV] || null;
   if (!sessionId) {
     return jobs;
@@ -45,7 +52,7 @@ function filterJobsForCurrentSession(jobs, input: any = {}) {
   return jobs.filter((job) => job.sessionId === sessionId);
 }
 
-function buildStopReviewPrompt(input: any = {}) {
+function buildStopReviewPrompt(input: StopHookInput = {}) {
   const lastAssistantMessage = String(input.last_assistant_message ?? "").trim();
   const template = loadPromptTemplate(ROOT_DIR, "stop-review-gate");
   const claudeResponseBlock = lastAssistantMessage
@@ -95,7 +102,7 @@ function parseStopReviewOutput(rawOutput) {
   };
 }
 
-function runStopReview(cwd, input: any = {}) {
+function runStopReview(cwd: string, input: StopHookInput = {}) {
   const scriptPath = path.join(SCRIPT_DIR, "codex-companion.mts");
   const prompt = buildStopReviewPrompt(input);
   const childEnv = {

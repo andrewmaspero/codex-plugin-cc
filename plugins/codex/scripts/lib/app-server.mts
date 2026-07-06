@@ -2,6 +2,7 @@ import fs from "node:fs";
 import net from "node:net";
 import process from "node:process";
 import { spawn } from "node:child_process";
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
 import type {
@@ -20,9 +21,13 @@ import { terminateProcessTree } from "./process.mts";
 
 type ProtocolError = Error & { data?: unknown; rpcCode?: number };
 type PendingRequest = {
-  resolve: (value: any) => void;
-  reject: (reason?: any) => void;
+  resolve: (value: unknown) => void;
+  reject: (reason?: unknown) => void;
   method: AppServerMethod | string;
+};
+
+type AppServerClientInternalOptions = CodexAppServerClientOptions & {
+  disableTurnCompleteHook?: boolean;
 };
 
 const PLUGIN_MANIFEST_URL = new URL("../../.claude-plugin/plugin.json", import.meta.url);
@@ -88,7 +93,7 @@ function createProtocolError(message, data = undefined): ProtocolError {
 
 class AppServerClientBase {
   cwd: string;
-  options: any;
+  options: AppServerClientInternalOptions;
   pending: Map<number, PendingRequest>;
   nextId: number;
   stderr: string;
@@ -100,13 +105,13 @@ class AppServerClientBase {
   exitPromise: Promise<void>;
   resolveExit!: (value: void) => void;
   exitResolved?: boolean;
-  proc?: any;
+  proc?: ChildProcessWithoutNullStreams;
   readline?: readline.Interface;
   socket?: net.Socket;
   endpoint?: string;
   turnCompleteHookEnabled?: boolean;
 
-  constructor(cwd: string, options: CodexAppServerClientOptions & Record<string, any> = {}) {
+  constructor(cwd: string, options: AppServerClientInternalOptions = {}) {
     this.cwd = cwd;
     this.options = options;
     this.pending = new Map();
@@ -141,7 +146,7 @@ class AppServerClientBase {
     });
   }
 
-  notify(method, params: any = {}) {
+  notify(method: string, params: Record<string, unknown> = {}) {
     if (this.closed) {
       return;
     }
@@ -225,7 +230,7 @@ class AppServerClientBase {
 }
 
 class SpawnedCodexAppServerClient extends AppServerClientBase {
-  constructor(cwd: string, options: CodexAppServerClientOptions & Record<string, any> = {}) {
+  constructor(cwd: string, options: AppServerClientInternalOptions = {}) {
     super(cwd, options);
     this.transport = "direct";
     const env = options.env ?? process.env;
@@ -327,7 +332,7 @@ class SpawnedCodexAppServerClient extends AppServerClientBase {
 }
 
 class BrokerCodexAppServerClient extends AppServerClientBase {
-  constructor(cwd: string, options: CodexAppServerClientOptions & Record<string, any> = {}) {
+  constructor(cwd: string, options: AppServerClientInternalOptions = {}) {
     super(cwd, options);
     this.transport = "broker";
     this.endpoint = options.brokerEndpoint;
@@ -388,7 +393,7 @@ class BrokerCodexAppServerClient extends AppServerClientBase {
 }
 
 export class CodexAppServerClient {
-  static async connect(cwd, options: any = {}) {
+  static async connect(cwd: string, options: AppServerClientInternalOptions = {}) {
     let brokerEndpoint = null;
     if (!options.disableBroker) {
       brokerEndpoint = options.brokerEndpoint ?? options.env?.[BROKER_ENDPOINT_ENV] ?? process.env[BROKER_ENDPOINT_ENV] ?? null;

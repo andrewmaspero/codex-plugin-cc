@@ -121,7 +121,16 @@ function appendActiveJobsTable(lines, jobs) {
   }
 }
 
-function pushJobDetails(lines, job, options: any = {}) {
+interface JobDetailsRenderOptions {
+  showElapsed?: boolean;
+  showDuration?: boolean;
+  showLog?: boolean;
+  showCancelHint?: boolean;
+  showResultHint?: boolean;
+  showReviewHint?: boolean;
+}
+
+function pushJobDetails(lines, job, options: JobDetailsRenderOptions = {}) {
   lines.push(`- ${formatJobLine(job)}`);
   if (job.summary) {
     lines.push(`  Summary: ${job.summary}`);

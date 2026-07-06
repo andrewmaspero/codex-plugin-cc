@@ -4,13 +4,16 @@ import os from "node:os";
 import path from "node:path";
 import type {
   AppServerNotification,
+  AppServerResponse,
   ReviewTarget,
   ThreadItem,
   ThreadResumeParams,
   ThreadStartParams,
   Turn,
+  TurnStartParams,
   UserInput
 } from "./app-server-protocol.d.ts";
+import type { JsonValue } from "../../.generated/app-server-types/serde_json/JsonValue.js";
 
 import { readJsonFile } from "./fs.mts";
 import { BROKER_BUSY_RPC_CODE, BROKER_ENDPOINT_ENV, CodexAppServerClient } from "./app-server.mts";
@@ -29,6 +32,99 @@ type ProgressUpdate =
       logBody?: string | null;
     };
 type ProgressReporter = (update: ProgressUpdate) => void;
+type AppServerClientInstance = Awaited<ReturnType<typeof CodexAppServerClient.connect>>;
+type AppServerTransport = "shared" | "dedicated" | "direct" | "closed";
+type StartRequestResponse = AppServerResponse<"review/start"> | AppServerResponse<"turn/start">;
+
+interface ThreadOptions {
+  model?: string | null;
+  approvalPolicy?: ThreadStartParams["approvalPolicy"] | null;
+  sandbox?: ThreadStartParams["sandbox"] | null;
+  ephemeral?: boolean;
+  threadName?: string | null;
+}
+
+interface ProgressExtra {
+  threadId?: string | null;
+  turnId?: string | null;
+  stderrMessage?: string | null;
+  logTitle?: string | null;
+  logBody?: string | null;
+}
+
+interface LogEventOptions extends ProgressExtra {
+  message?: string | null;
+  phase?: string | null;
+}
+
+interface RegisterThreadOptions {
+  threadName?: string | null;
+  name?: string | null;
+  agentNickname?: string | null;
+  agentRole?: string | null;
+}
+
+interface CompleteTurnOptions {
+  inferred?: boolean;
+}
+
+interface CaptureTurnOptions {
+  onProgress?: ProgressReporter | null;
+  idleReconcileMs?: number | string | null;
+  onResponse?: (response: StartRequestResponse, state: TurnCaptureState) => void;
+}
+
+interface WithSteerableAppServerOptions {
+  onEndpoint?: ((endpoint: string | null, transport: AppServerTransport) => void) | null;
+}
+
+interface AuthStatusFields {
+  available?: boolean;
+  loggedIn?: boolean;
+  detail?: string;
+  source?: string;
+  authMethod?: string | null;
+  verified?: boolean | null;
+  requiresOpenaiAuth?: boolean | null;
+  provider?: string | null;
+}
+
+interface CodexAuthStatusOptions {
+  env?: NodeJS.ProcessEnv;
+}
+
+interface RunAppServerReviewOptions {
+  onProgress?: ProgressReporter | null;
+  model?: string | null;
+  threadName?: string | null;
+  delivery?: "inline" | "detached";
+  target?: ReviewTarget | null;
+}
+
+interface ImportExternalAgentSessionOptions {
+  sourcePath?: string;
+  onProgress?: ProgressReporter | null;
+}
+
+interface RunAppServerTurnOptions {
+  resumeThreadId?: string | null;
+  model?: string | null;
+  sandbox?: ThreadStartParams["sandbox"] | null;
+  persistThread?: boolean;
+  threadName?: string | null;
+  goal?: { objective?: string | null; tokenBudget?: number | null } | null;
+  prompt?: string | null;
+  defaultPrompt?: string | null;
+  effort?: string | null;
+  outputSchema?: JsonValue;
+  onProgress?: ProgressReporter | null;
+  onRuntimeEndpoint?: ((endpoint: string | null, transport: AppServerTransport) => void) | null;
+}
+
+interface StructuredOutputFallback {
+  failureMessage?: string;
+  [key: string]: unknown;
+}
 
 interface TurnCaptureState {
   threadId: string;
@@ -73,8 +169,7 @@ function cleanCodexStderr(stderr) {
     .join("\n");
 }
 
-/** @returns {ThreadStartParams} */
-function buildThreadParams(cwd, options: any = {}) {
+function buildThreadParams(cwd, options: ThreadOptions = {}): ThreadStartParams {
   return {
     cwd,
     model: options.model ?? null,
@@ -85,8 +180,7 @@ function buildThreadParams(cwd, options: any = {}) {
   };
 }
 
-/** @returns {ThreadResumeParams} */
-function buildResumeParams(threadId, cwd, options: any = {}) {
+function buildResumeParams(threadId, cwd, options: ThreadOptions = {}): ThreadResumeParams {
   return {
     threadId,
     cwd,
@@ -96,8 +190,7 @@ function buildResumeParams(threadId, cwd, options: any = {}) {
   };
 }
 
-/** @returns {UserInput[]} */
-function buildTurnInput(prompt) {
+function buildTurnInput(prompt): UserInput[] {
   return [{ type: "text", text: prompt, text_elements: [] }];
 }
 
@@ -105,7 +198,7 @@ function buildTurnInput(prompt) {
 // Auxiliary fields mirror the CLI's own SandboxPolicy::new_*_policy defaults
 // (codex-rs/protocol/src/protocol.rs) so a turn override behaves identically to
 // the same mode requested at thread start.
-function buildTurnSandboxPolicy(sandbox) {
+function buildTurnSandboxPolicy(sandbox): TurnStartParams["sandboxPolicy"] {
   switch (sandbox) {
     case "danger-full-access":
       return { type: "dangerFullAccess" };
@@ -225,7 +318,7 @@ function mergeReasoningSections(existingSections, nextSections) {
  * @param {string | null | undefined} message
  * @param {string | null | undefined} [phase]
  */
-function emitProgress(onProgress, message, phase = null, extra: any = {}) {
+function emitProgress(onProgress, message, phase = null, extra: ProgressExtra = {}) {
   if (!onProgress || !message) {
     return;
   }
@@ -236,7 +329,7 @@ function emitProgress(onProgress, message, phase = null, extra: any = {}) {
   onProgress({ message, phase, ...extra });
 }
 
-function emitLogEvent(onProgress, options: any = {}) {
+function emitLogEvent(onProgress, options: LogEventOptions = {}) {
   if (!onProgress) {
     return;
   }
@@ -257,7 +350,7 @@ function labelForThread(state, threadId) {
   return state.threadLabels.get(threadId) ?? threadId;
 }
 
-function registerThread(state, threadId, options: any = {}) {
+function registerThread(state, threadId, options: RegisterThreadOptions = {}) {
   if (!threadId) {
     return;
   }
@@ -383,7 +476,7 @@ function clearCompletionTimer(state) {
   }
 }
 
-function completeTurn(state, turn = null, options: any = {}) {
+function completeTurn(state, turn = null, options: CompleteTurnOptions = {}) {
   if (state.completed) {
     return;
   }
@@ -699,7 +792,7 @@ const DEFAULT_IDLE_RECONCILE_MS = 60000;
 const IDLE_RECONCILE_ENV = "CODEX_COMPANION_IDLE_RECONCILE_MS";
 const TERMINAL_TURN_STATUSES = new Set(["completed", "failed", "interrupted"]);
 
-function resolveIdleReconcileMs(options: any = {}) {
+function resolveIdleReconcileMs(options: CaptureTurnOptions = {}) {
   const fromEnv = Number(process.env[IDLE_RECONCILE_ENV]);
   if (Number.isFinite(fromEnv) && fromEnv >= 0) {
     return fromEnv;
@@ -769,7 +862,12 @@ function startIdleReconciler(client, state, idleMs, getLastEventAt) {
   return timer;
 }
 
-async function captureTurn(client, threadId, startRequest, options: any = {}) {
+async function captureTurn(
+  client: AppServerClientInstance,
+  threadId,
+  startRequest: () => Promise<StartRequestResponse>,
+  options: CaptureTurnOptions = {}
+) {
   const state = createTurnCaptureState(threadId, options);
   const previousHandler = client.notificationHandler;
   let lastEventAt = Date.now();
@@ -927,12 +1025,11 @@ export async function withAppServer(cwd, fn) {
  * job and report its endpoint through onEndpoint so steer/goal/cancel can
  * target it. The dedicated broker is torn down when the run finishes.
  */
-/**
- * @param {string} cwd
- * @param {(client: InstanceType<typeof CodexAppServerClient> | any) => Promise<any>} fn
- * @param {{ onEndpoint?: ((endpoint: string | null, transport: "shared" | "dedicated" | "direct" | "closed") => void) | null }} [options]
- */
-async function withSteerableAppServer(cwd, fn, options: any = {}) {
+async function withSteerableAppServer<T>(
+  cwd,
+  fn: (client: AppServerClientInstance) => Promise<T>,
+  options: WithSteerableAppServerOptions = {}
+): Promise<T> {
   const onEndpoint = options.onEndpoint ?? null;
   let client = null;
   try {
@@ -1075,7 +1172,7 @@ async function requestExternalAgentSessionImport(client, params) {
   }
 }
 
-async function startThread(client, cwd, options: any = {}) {
+async function startThread(client: AppServerClientInstance, cwd, options: ThreadOptions = {}): Promise<AppServerResponse<"thread/start">> {
   const response = await client.request("thread/start", buildThreadParams(cwd, options));
   const threadId = response.thread.id;
   if (options.threadName) {
@@ -1093,7 +1190,7 @@ async function startThread(client, cwd, options: any = {}) {
   return response;
 }
 
-async function resumeThread(client, threadId, cwd, options: any = {}) {
+async function resumeThread(client: AppServerClientInstance, threadId, cwd, options: ThreadOptions = {}) {
   return client.request("thread/resume", buildResumeParams(threadId, cwd, options));
 }
 
@@ -1123,7 +1220,7 @@ function formatProviderLabel(providerId, providerConfig = null) {
   return BUILTIN_PROVIDER_LABELS.get(providerId) ?? providerId;
 }
 
-function buildAuthStatus(fields: any = {}) {
+function buildAuthStatus(fields: AuthStatusFields = {}) {
   return {
     available: true,
     loggedIn: false,
@@ -1268,7 +1365,7 @@ export function getSessionRuntimeStatus(env = process.env, cwd = process.cwd()) 
   };
 }
 
-export async function getCodexAuthStatus(cwd, options: any = {}) {
+export async function getCodexAuthStatus(cwd, options: CodexAuthStatusOptions = {}) {
   const availability = getCodexAvailability(cwd);
   if (!availability.available) {
     return {
@@ -1441,7 +1538,7 @@ export async function requestThreadGoal(cwd, method, params, { brokerEndpoint = 
   }
 }
 
-export async function runAppServerReview(cwd, options: any = {}) {
+export async function runAppServerReview(cwd, options: RunAppServerReviewOptions = {}) {
   const availability = getCodexAvailability(cwd);
   if (!availability.available) {
     throw new Error("Codex CLI is not installed or is missing required runtime support. Install it with `npm install -g @openai/codex`, then rerun `/codex:setup`.");
@@ -1473,7 +1570,7 @@ export async function runAppServerReview(cwd, options: any = {}) {
       {
         onProgress: options.onProgress,
         onResponse(response, state) {
-          if (response.reviewThreadId) {
+          if ("reviewThreadId" in response && response.reviewThreadId) {
             state.threadIds.add(response.reviewThreadId);
             if (delivery === "detached") {
               state.threadId = response.reviewThreadId;
@@ -1497,7 +1594,7 @@ export async function runAppServerReview(cwd, options: any = {}) {
   });
 }
 
-export async function importExternalAgentSession(cwd, options: any = {}) {
+export async function importExternalAgentSession(cwd, options: ImportExternalAgentSessionOptions = {}) {
   const availability = getCodexAvailability(cwd);
   if (!availability.available) {
     throw new Error("Codex CLI is not installed or is missing required runtime support. Install it with `npm install -g @openai/codex`, then rerun `/codex:setup`.");
@@ -1550,7 +1647,7 @@ export async function teardownWorkspaceBrokerSession(cwd) {
   return true;
 }
 
-export async function runAppServerTurn(cwd, options: any = {}) {
+export async function runAppServerTurn(cwd, options: RunAppServerTurnOptions = {}) {
   const availability = getCodexAvailability(cwd);
   if (!availability.available) {
     throw new Error("Codex CLI is not installed or is missing required runtime support. Install it with `npm install -g @openai/codex`, then rerun `/codex:setup`.");
@@ -1670,7 +1767,7 @@ export function buildPersistentTaskThreadName(prompt) {
   return buildTaskThreadName(prompt);
 }
 
-export function parseStructuredOutput(rawOutput, fallback: any = {}) {
+export function parseStructuredOutput(rawOutput, fallback: StructuredOutputFallback = {}) {
   if (!rawOutput) {
     return {
       parsed: null,

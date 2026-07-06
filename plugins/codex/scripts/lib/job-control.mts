@@ -10,15 +10,35 @@ import { resolveWorkspaceRoot } from "./workspace.mts";
 export const DEFAULT_MAX_STATUS_JOBS = 8;
 export const DEFAULT_MAX_PROGRESS_LINES = 4;
 
+interface SessionFilterOptions {
+  env?: NodeJS.ProcessEnv;
+}
+
+interface EnrichJobOptions {
+  maxProgressLines?: number;
+}
+
+interface ReapOrphanedJobsOptions {
+  isProcessAlive?: (pid: number) => boolean | null;
+}
+
+interface StatusSnapshotOptions extends SessionFilterOptions, EnrichJobOptions, ReapOrphanedJobsOptions {
+  maxJobs?: number;
+  all?: boolean;
+}
+
+type SingleJobSnapshotOptions = EnrichJobOptions & ReapOrphanedJobsOptions;
+type ResolveCancelableJobOptions = SessionFilterOptions;
+
 export function sortJobsNewestFirst(jobs) {
   return [...jobs].sort((left, right) => String(right.updatedAt ?? "").localeCompare(String(left.updatedAt ?? "")));
 }
 
-function getCurrentSessionId(options: any = {}) {
+function getCurrentSessionId(options: SessionFilterOptions = {}): string | null {
   return options.env?.[SESSION_ID_ENV] ?? process.env[SESSION_ID_ENV] ?? null;
 }
 
-function filterJobsForCurrentSession(jobs, options: any = {}) {
+function filterJobsForCurrentSession(jobs: JobRecord[], options: SessionFilterOptions = {}): JobRecord[] {
   const sessionId = getCurrentSessionId(options);
   if (!sessionId) {
     return jobs;
@@ -160,7 +180,7 @@ function inferLegacyJobPhase(job, progressPreview = []) {
   return job.jobClass === "review" ? "reviewing" : "running";
 }
 
-export function enrichJob(job, options: any = {}) {
+export function enrichJob(job: JobRecord, options: EnrichJobOptions = {}) {
   const maxProgressLines = options.maxProgressLines ?? DEFAULT_MAX_PROGRESS_LINES;
   const enriched = {
     ...job,
@@ -182,12 +202,13 @@ export function enrichJob(job, options: any = {}) {
   };
 }
 
-export function readStoredJob(workspaceRoot, jobId) {
+export function readStoredJob(workspaceRoot: string, jobId: string): JobRecord | null {
   const jobFile = resolveJobFile(workspaceRoot, jobId);
   if (!fs.existsSync(jobFile)) {
     return null;
   }
-  return readJobFile(jobFile);
+  const job = readJobFile(jobFile);
+  return typeof job.id === "string" ? (job as JobRecord) : null;
 }
 
 function matchJobReference(jobs: JobRecord[], reference: string, predicate: (job: JobRecord) => boolean = () => true) {
@@ -224,7 +245,7 @@ function orphanMessage(pid) {
 // within one poll cycle. The status re-check runs inside the state lock: if
 // the worker wrote "completed" between our snapshot read and this write, the
 // job is no longer active and we leave it untouched.
-export function reapOrphanedJobs(workspaceRoot, jobs, options: any = {}) {
+export function reapOrphanedJobs(workspaceRoot: string, jobs: JobRecord[], options: ReapOrphanedJobsOptions = {}): JobRecord[] {
   const isAlive = options.isProcessAlive ?? isProcessAlive;
   let reapedAny = false;
 
@@ -272,7 +293,7 @@ export function reapOrphanedJobs(workspaceRoot, jobs, options: any = {}) {
   return reapedAny ? listJobs(workspaceRoot) : jobs;
 }
 
-export function buildStatusSnapshot(cwd, options: any = {}) {
+export function buildStatusSnapshot(cwd: string, options: StatusSnapshotOptions = {}) {
   const workspaceRoot = resolveWorkspaceRoot(cwd);
   const config = getConfig(workspaceRoot);
   const jobs = sortJobsNewestFirst(
@@ -303,7 +324,7 @@ export function buildStatusSnapshot(cwd, options: any = {}) {
   };
 }
 
-export function buildSingleJobSnapshot(cwd, reference, options: any = {}) {
+export function buildSingleJobSnapshot(cwd: string, reference: string, options: SingleJobSnapshotOptions = {}) {
   const workspaceRoot = resolveWorkspaceRoot(cwd);
   if (reference) {
     const globalMatch = resolveJobFileGlobally(workspaceRoot, reference);
@@ -394,7 +415,7 @@ export function resolveResultJob(cwd, reference) {
   throw new Error("No finished Codex jobs found for this repository yet.");
 }
 
-export function resolveCancelableJob(cwd, reference, options: any = {}) {
+export function resolveCancelableJob(cwd: string, reference: string, options: ResolveCancelableJobOptions = {}) {
   const workspaceRoot = resolveWorkspaceRoot(cwd);
   const jobs = sortJobsNewestFirst(listJobs(workspaceRoot));
   const activeJobs = jobs.filter((job) => job.status === "queued" || job.status === "running");

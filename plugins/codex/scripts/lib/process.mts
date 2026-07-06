@@ -1,7 +1,40 @@
 import { spawnSync } from "node:child_process";
+import type { SpawnSyncOptionsWithStringEncoding } from "node:child_process";
 import process from "node:process";
 
-export function runCommand(command, args = [], options: any = {}) {
+export interface CommandResult {
+  command: string;
+  args: string[];
+  status: number;
+  signal: NodeJS.Signals | null;
+  stdout: string;
+  stderr: string;
+  error: Error | null;
+}
+
+export interface RunCommandOptions {
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+  input?: string | Buffer;
+  maxBuffer?: number;
+  stdio?: SpawnSyncOptionsWithStringEncoding["stdio"];
+}
+
+export interface BinaryAvailableResult {
+  available: boolean;
+  detail: string;
+}
+
+export interface ProcessProbeOptions {
+  killImpl?: typeof process.kill;
+}
+
+export interface TerminateProcessTreeOptions extends RunCommandOptions, ProcessProbeOptions {
+  platform?: NodeJS.Platform;
+  runCommandImpl?: (command: string, args: string[], options?: RunCommandOptions) => CommandResult;
+}
+
+export function runCommand(command: string, args: string[] = [], options: RunCommandOptions = {}): CommandResult {
   const result = spawnSync(command, args, {
     cwd: options.cwd,
     env: options.env,
@@ -24,7 +57,7 @@ export function runCommand(command, args = [], options: any = {}) {
   };
 }
 
-export function runCommandChecked(command, args = [], options: any = {}) {
+export function runCommandChecked(command: string, args: string[] = [], options: RunCommandOptions = {}): CommandResult {
   const result = runCommand(command, args, options);
   if (result.error) {
     throw result.error;
@@ -35,7 +68,7 @@ export function runCommandChecked(command, args = [], options: any = {}) {
   return result;
 }
 
-export function binaryAvailable(command, versionArgs = ["--version"], options: any = {}) {
+export function binaryAvailable(command: string, versionArgs: string[] = ["--version"], options: RunCommandOptions = {}): BinaryAvailableResult {
   const result = runCommand(command, versionArgs, options);
   if (result.error && (result.error as NodeJS.ErrnoException).code === "ENOENT") {
     return { available: false, detail: "not found" };
@@ -56,7 +89,7 @@ function looksLikeMissingProcessMessage(text) {
 
 // Returns true/false when liveness is knowable, null when the pid is unusable.
 // EPERM means "alive but not ours", so it counts as alive.
-export function isProcessAlive(pid, options: any = {}) {
+export function isProcessAlive(pid: number, options: ProcessProbeOptions = {}): boolean | null {
   if (!Number.isFinite(pid) || pid <= 0) {
     return null;
   }
@@ -65,11 +98,11 @@ export function isProcessAlive(pid, options: any = {}) {
     killImpl(pid, 0);
     return true;
   } catch (error) {
-    return error?.code === "EPERM" ? true : false;
+    return (error as NodeJS.ErrnoException)?.code === "EPERM" ? true : false;
   }
 }
 
-export function terminateProcessTree(pid, options: any = {}) {
+export function terminateProcessTree(pid: number, options: TerminateProcessTreeOptions = {}) {
   if (!Number.isFinite(pid)) {
     return { attempted: false, delivered: false, method: null };
   }
@@ -93,12 +126,12 @@ export function terminateProcessTree(pid, options: any = {}) {
       return { attempted: true, delivered: false, method: "taskkill", result };
     }
 
-    if (result.error?.code === "ENOENT") {
+    if ((result.error as NodeJS.ErrnoException | null)?.code === "ENOENT") {
       try {
         killImpl(pid);
         return { attempted: true, delivered: true, method: "kill" };
       } catch (error) {
-        if (error?.code === "ESRCH") {
+        if ((error as NodeJS.ErrnoException)?.code === "ESRCH") {
           return { attempted: true, delivered: false, method: "kill" };
         }
         throw error;
@@ -116,12 +149,12 @@ export function terminateProcessTree(pid, options: any = {}) {
     killImpl(-pid, "SIGTERM");
     return { attempted: true, delivered: true, method: "process-group" };
   } catch (error) {
-    if (error?.code !== "ESRCH") {
+    if ((error as NodeJS.ErrnoException)?.code !== "ESRCH") {
       try {
         killImpl(pid, "SIGTERM");
         return { attempted: true, delivered: true, method: "process" };
       } catch (innerError) {
-        if (innerError?.code === "ESRCH") {
+        if ((innerError as NodeJS.ErrnoException)?.code === "ESRCH") {
           return { attempted: true, delivered: false, method: "process" };
         }
         throw innerError;
@@ -132,7 +165,7 @@ export function terminateProcessTree(pid, options: any = {}) {
   }
 }
 
-export function formatCommandFailure(result) {
+export function formatCommandFailure(result: CommandResult): string {
   const parts = [`${result.command} ${result.args.join(" ")}`.trim()];
   if (result.signal) {
     parts.push(`signal=${result.signal}`);

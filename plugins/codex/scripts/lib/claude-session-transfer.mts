@@ -17,7 +17,11 @@ function resolveUserPath(cwd, value) {
   return ensureAbsolutePath(cwd, value);
 }
 
-export function resolveClaudeSessionPath(cwd, options: any = {}) {
+interface ClaudeSessionPathOptions {
+  source?: string;
+}
+
+export function resolveClaudeSessionPath(cwd: string, options: ClaudeSessionPathOptions = {}) {
   const requestedPath = options.source || process.env[TRANSCRIPT_PATH_ENV];
   if (!requestedPath) {
     throw new Error("Could not identify the current Claude transcript. Retry with --source <path-to-claude-jsonl>.");
