@@ -39,7 +39,9 @@ jobs:
         run: npm run check-version
 
       - name: Run test suite
-        run: npm test
+        run: |
+          pnpm run test:unit
+          pnpm run test:integration
 
       - name: Run build
         run: npm run build

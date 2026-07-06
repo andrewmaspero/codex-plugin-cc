@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 
@@ -80,14 +80,16 @@ function endpointReachable(endpoint) {
   });
 }
 
-// Timing-flaky on low-core CI runners (needs the first job's turn to still be
-// streaming when the second launches); passes in isolation. Skipped on CI until
-// the Vitest migration adds per-test retry. Tracked in codex-skills .docs.
-test("two parallel jobs in one workspace are both steerable", { skip: Boolean(process.env.CI) }, async () => {
+test("two parallel jobs in one workspace are both steerable", async () => {
   const repo = makeRepo();
   const binDir = makeTempDir();
   installFakeCodex(binDir, "interruptible-slow-task");
   const env = cleanEnv(binDir);
+  // Hold both turns open until interrupted: the assertions below require job
+  // 1's turn to still be streaming when job 2 launches, which a fixed-length
+  // fake turn cannot guarantee under load (this test was flaky for exactly
+  // that reason). Both jobs are cancelled (interrupted) at the end.
+  env.FAKE_CODEX_HOLD_TURNS = "1";
 
   const first = run("node", [SCRIPT, "task", "--background", "--json", "investigate the first failure"], { cwd: repo, env });
   assert.equal(first.status, 0, first.stderr);

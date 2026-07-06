@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.5.1 (fork)
+
+Test runner migration.
+
+- Migrated the test suite from `node:test` to Vitest with separate unit and
+  integration commands.
+- Kept fixture-spawning tests in the integration command and capped Vitest
+  workers at 6 to avoid local oversubscription.
+- Replaced the two CI-only timing skips with per-test retry.
+
 ## 1.5.0 (fork)
 
 Runtime TypeScript migration.

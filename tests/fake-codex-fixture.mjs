@@ -696,18 +696,23 @@ rl.on("line", (line) => {
 
 	        if (BEHAVIOR === "interruptible-slow-task") {
 	          send({ method: "turn/started", params: { threadId: thread.id, turn: buildTurn(turnId) } });
-	          const timer = setTimeout(() => {
-	            if (!interruptibleTurns.has(turnId)) {
-	              return;
-	            }
-	            interruptibleTurns.delete(turnId);
-	            for (const entry of items) {
-	              if (entry && entry.completed) {
-	                send({ method: "item/completed", params: { threadId: thread.id, turnId, item: entry.completed } });
-	              }
-	            }
-	            send({ method: "turn/completed", params: { threadId: thread.id, turn: buildTurn(turnId, "completed") } });
-	          }, 5000);
+	          // FAKE_CODEX_HOLD_TURNS: hold the turn open until interrupted so
+	          // tests that need an in-flight turn are load-independent instead of
+	          // racing a fixed timer (the 5s fallback loses under full-suite load).
+	          const timer = process.env.FAKE_CODEX_HOLD_TURNS
+	            ? null
+	            : setTimeout(() => {
+	                if (!interruptibleTurns.has(turnId)) {
+	                  return;
+	                }
+	                interruptibleTurns.delete(turnId);
+	                for (const entry of items) {
+	                  if (entry && entry.completed) {
+	                    send({ method: "item/completed", params: { threadId: thread.id, turnId, item: entry.completed } });
+	                  }
+	                }
+	                send({ method: "turn/completed", params: { threadId: thread.id, turn: buildTurn(turnId, "completed") } });
+	              }, 5000);
 	          interruptibleTurns.set(turnId, { threadId: thread.id, timer });
 	        } else if (BEHAVIOR === "slow-task") {
 	          emitTurnCompletedLater(thread.id, turnId, items, 400);

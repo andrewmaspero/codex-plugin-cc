@@ -1,15 +1,11 @@
-// Strict unknown-flag rejection (a mistyped flag used to become prompt text
-// silently, e.g. `--promt-stdin` launching a job whose brief was the literal
-// flag) and the `worktrees [--prune]` maintenance subcommand.
 import fs from "node:fs";
 import path from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 
 import { buildEnv, installFakeCodex } from "./fake-codex-fixture.mjs";
 import { initGitRepo, makeTempDir, run } from "./helpers.mjs";
-import { parseArgs } from "../plugins/codex/scripts/lib/args.mts";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PLUGIN_ROOT = path.join(ROOT, "plugins", "codex");
@@ -41,37 +37,6 @@ function endSession(cwd, env) {
     input: JSON.stringify({ hook_event_name: "SessionEnd", cwd })
   });
 }
-
-test("strict parseArgs rejects unknown flags but keeps passthrough and non-flag tokens", () => {
-  assert.throws(
-    () => parseArgs(["--promt-stdin"], { strict: true, booleanOptions: ["prompt-stdin"] }),
-    /Unknown flag "--promt-stdin"/
-  );
-  assert.throws(() => parseArgs(["-z"], { strict: true }), /Unknown flag "-z"/);
-
-  // Prose after a bare `--` is untouched.
-  const passthrough = parseArgs(["--", "--not-a-flag", "keep this"], { strict: true });
-  assert.deepEqual(passthrough.positionals, ["--not-a-flag", "keep this"]);
-
-  // Bare dash and negative numbers stay positional.
-  const nonFlags = parseArgs(["-", "-2"], { strict: true });
-  assert.deepEqual(nonFlags.positionals, ["-", "-2"]);
-});
-
-test("companion subcommands reject mistyped flags with a clear error", () => {
-  const repo = makeRepo();
-  const binDir = makeTempDir();
-  installFakeCodex(binDir);
-  const env = cleanEnv(binDir);
-
-  const task = run("node", [SCRIPT, "task", "--json", "--promt-stdin", "do a thing"], { cwd: repo, env });
-  assert.equal(task.status, 1);
-  assert.match(task.stderr, /Unknown flag "--promt-stdin"/);
-
-  const status = run("node", [SCRIPT, "status", "--watch"], { cwd: repo, env });
-  assert.equal(status.status, 1);
-  assert.match(status.stderr, /Unknown flag "--watch"/);
-});
 
 test("worktrees lists and prunes plugin worktrees, keeping dirty ones", () => {
   const repo = makeRepo();

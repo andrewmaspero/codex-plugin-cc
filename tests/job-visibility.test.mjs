@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
-import test from "node:test";
+import { test } from "vitest";
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 

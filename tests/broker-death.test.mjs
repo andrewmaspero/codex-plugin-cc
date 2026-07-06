@@ -5,7 +5,7 @@
 // the job records a precise terminal failure.
 import fs from "node:fs";
 import path from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 

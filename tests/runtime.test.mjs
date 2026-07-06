@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -809,7 +809,7 @@ test("task logs reasoning summaries and assistant messages to the job log", () =
 });
 
 // Same timing-flaky family as the parallel-broker test on low-core CI runners.
-test("task logs subagent reasoning and messages with a subagent prefix", { skip: Boolean(process.env.CI) }, () => {
+test("task logs subagent reasoning and messages with a subagent prefix", { retry: 2 }, () => {
   const repo = makeTempDir();
   const binDir = makeTempDir();
   installFakeCodex(binDir, "with-subagent");
@@ -1564,7 +1564,7 @@ test("result for a finished write-capable task returns the raw Codex final respo
   assert.match(result.stdout, /Resume in Codex: codex resume thr_[a-z0-9]+/i);
 });
 
-test("cancel stops an active background job and marks it cancelled", async (t) => {
+test("cancel stops an active background job and marks it cancelled", async ({ onTestFinished }) => {
   const workspace = makeTempDir();
   const stateDir = resolveStateDir(workspace);
   const jobsDir = path.join(stateDir, "jobs");
@@ -1577,7 +1577,7 @@ test("cancel stops an active background job and marks it cancelled", async (t) =
   });
   sleeper.unref();
 
-  t.after(() => {
+  onTestFinished(() => {
     try {
       process.kill(-sleeper.pid, "SIGTERM");
     } catch {
@@ -1826,7 +1826,7 @@ test("cancel sends turn interrupt to the shared app-server before killing a brok
   assert.equal(cleanup.status, 0, cleanup.stderr);
 });
 
-test("session end fully cleans up jobs for the ending session", async (t) => {
+test("session end fully cleans up jobs for the ending session", async ({ onTestFinished }) => {
   const repo = makeTempDir();
   initGitRepo(repo);
   fs.writeFileSync(path.join(repo, "README.md"), "hello\n");
@@ -1857,7 +1857,7 @@ test("session end fully cleans up jobs for the ending session", async (t) => {
   sleeper.unref();
   fs.writeFileSync(runningJobFile, JSON.stringify({ id: "review-running" }, null, 2), "utf8");
 
-  t.after(() => {
+  onTestFinished(() => {
     try {
       process.kill(-sleeper.pid, "SIGTERM");
     } catch {

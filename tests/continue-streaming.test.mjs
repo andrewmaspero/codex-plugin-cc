@@ -7,7 +7,7 @@
 // (OBS-F, 2026-07-06-orphaned-worker-reaper.md).
 import fs from "node:fs";
 import path from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 

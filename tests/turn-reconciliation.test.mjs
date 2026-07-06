@@ -8,7 +8,7 @@
 //    codex itself reports the turn finished and the worker never did.
 import fs from "node:fs";
 import path from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
