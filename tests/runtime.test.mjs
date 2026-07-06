@@ -6,7 +6,7 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 import { buildEnv, installFakeCodex } from "./fake-codex-fixture.mjs";
-import { initGitRepo, makeTempDir, run } from "./helpers.mjs";
+import { initGitRepo, makeTempDir, run, testBaseEnv } from "./helpers.mjs";
 import { loadBrokerSession, saveBrokerSession } from "../plugins/codex/scripts/lib/broker-lifecycle.mjs";
 import { resolveStateDir } from "../plugins/codex/scripts/lib/state.mjs";
 
@@ -52,7 +52,7 @@ test("setup is ready without npm when Codex is already installed and authenticat
   const result = run("node", [SCRIPT, "setup", "--json"], {
     cwd: ROOT,
     env: {
-      ...process.env,
+      ...testBaseEnv(),
       PATH: binDir
     }
   });
@@ -557,7 +557,7 @@ test("task-resume-candidate returns the latest rescue thread from the current se
   const result = run("node", [SCRIPT, "task-resume-candidate", "--json"], {
     cwd: workspace,
     env: {
-      ...process.env,
+      ...testBaseEnv(),
       CODEX_COMPANION_SESSION_ID: "sess-current"
     }
   });
@@ -679,7 +679,7 @@ test("session start hook exports the Claude session id, transcript path, and plu
   const result = run("node", [SESSION_HOOK, "SessionStart"], {
     cwd: repo,
     env: {
-      ...process.env,
+      ...testBaseEnv(),
       CLAUDE_ENV_FILE: envFile,
       CLAUDE_PLUGIN_DATA: pluginDataDir
     },
@@ -1243,7 +1243,7 @@ test("status without a job id only shows jobs from the current Claude session", 
   const result = run("node", [SCRIPT, "status"], {
     cwd: workspace,
     env: {
-      ...process.env,
+      ...testBaseEnv(),
       CODEX_COMPANION_SESSION_ID: "sess-current"
     }
   });
@@ -1525,7 +1525,7 @@ test("result without a job id prefers the latest finished job from the current C
   const result = run("node", [SCRIPT, "result"], {
     cwd: workspace,
     env: {
-      ...process.env,
+      ...testBaseEnv(),
       CODEX_COMPANION_SESSION_ID: "sess-current"
     }
   });
@@ -1692,7 +1692,7 @@ test("cancel without a job id ignores active jobs from other Claude sessions", (
   );
 
   const env = {
-    ...process.env,
+    ...testBaseEnv(),
     CODEX_COMPANION_SESSION_ID: "sess-current"
   };
   const status = run("node", [SCRIPT, "status", "--json"], {
@@ -1747,7 +1747,7 @@ test("cancel with a job id can still target an active job from another Claude se
   );
 
   const env = {
-    ...process.env,
+    ...testBaseEnv(),
     CODEX_COMPANION_SESSION_ID: "sess-current"
   };
   const cancel = run("node", [SCRIPT, "cancel", "task-other", "--json"], {
@@ -1914,7 +1914,7 @@ test("session end fully cleans up jobs for the ending session", async (t) => {
   const result = run("node", [SESSION_HOOK, "SessionEnd"], {
     cwd: repo,
     env: {
-      ...process.env,
+      ...testBaseEnv(),
       CODEX_COMPANION_SESSION_ID: "sess-current"
     },
     input: JSON.stringify({
@@ -2047,7 +2047,7 @@ test("stop hook logs running tasks to stderr without blocking when the review ga
   const blocked = run("node", [STOP_HOOK], {
     cwd: repo,
     env: {
-      ...process.env,
+      ...testBaseEnv(),
       CODEX_COMPANION_SESSION_ID: "sess-current"
     },
     input: JSON.stringify({ cwd: repo })
@@ -2100,7 +2100,7 @@ test("stop hook does not block when Codex is unavailable even if the review gate
   const allowed = run(process.execPath, [STOP_HOOK], {
     cwd: repo,
     env: {
-      ...process.env,
+      ...testBaseEnv(),
       PATH: ""
     },
     input: JSON.stringify({ cwd: repo })

@@ -87,6 +87,29 @@ function buildTurnInput(prompt) {
   return [{ type: "text", text: prompt, text_elements: [] }];
 }
 
+// Maps the plugin's SandboxMode string to the structured per-turn SandboxPolicy.
+// Auxiliary fields mirror the CLI's own SandboxPolicy::new_*_policy defaults
+// (codex-rs/protocol/src/protocol.rs) so a turn override behaves identically to
+// the same mode requested at thread start.
+function buildTurnSandboxPolicy(sandbox) {
+  switch (sandbox) {
+    case "danger-full-access":
+      return { type: "dangerFullAccess" };
+    case "workspace-write":
+      return {
+        type: "workspaceWrite",
+        writableRoots: [],
+        networkAccess: false,
+        excludeTmpdirEnvVar: false,
+        excludeSlashTmp: false
+      };
+    case "read-only":
+      return { type: "readOnly", networkAccess: false };
+    default:
+      return null;
+  }
+}
+
 function shorten(text, limit = 72) {
   const normalized = String(text ?? "").trim().replace(/\s+/g, " ");
   if (!normalized) {
@@ -1376,6 +1399,12 @@ export async function runAppServerTurn(cwd, options = {}) {
           input: buildTurnInput(prompt),
           model: options.model ?? null,
           effort: options.effort ?? null,
+          // thread/resume silently ignores sandbox/approval overrides when the
+          // thread is already loaded in the app-server (it only logs a warning);
+          // the per-turn override is honored unconditionally, so send it on
+          // every turn to make the job's sandbox deterministic.
+          approvalPolicy: "never",
+          sandboxPolicy: buildTurnSandboxPolicy(options.sandbox),
           outputSchema: options.outputSchema ?? null
         }),
       { onProgress: options.onProgress }

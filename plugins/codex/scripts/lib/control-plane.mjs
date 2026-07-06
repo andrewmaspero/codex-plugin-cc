@@ -589,12 +589,20 @@ export async function listItemsCompact(cwd, options = {}) {
           if (collected.length >= limit) {
             break;
           }
-          collected.push({ turnId: turn.id, ...compactItem(item) });
+          collected.push({ turnId: turn.id, raw: item });
         }
       }
     }
 
-    let rendered = collected;
+    // A single matching item gets the whole char budget instead of the fixed
+    // preview slice, so a controller can retrieve one full agentMessage
+    // bounded only by --budget (e.g. `items <t> --turn <id> --type agentMessage
+    // --limit 1 --budget 20000`).
+    const singleItemTextLimit = collected.length === 1 ? budgetChars : undefined;
+    let rendered = collected.map(({ turnId, raw }) => ({
+      turnId,
+      ...compactItem(raw, singleItemTextLimit)
+    }));
     let budgetTruncated = false;
     let totalChars = 0;
     const withinBudget = [];

@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.4.1 (fork)
+
+Sandbox correctness, single-item retrieval, and test reliability:
+
+- Per-turn sandbox enforcement: every `turn/start` now carries a structured
+  `sandboxPolicy` (and `approvalPolicy: never`) derived from the job's sandbox.
+  Fixes `continue --full` silently running read-only on threads created
+  read-only — the app-server ignores `thread/resume` overrides for loaded
+  threads, but honors per-turn overrides unconditionally.
+- `items` with a single matching item now returns its full text bounded only by
+  `--budget`, instead of the fixed 400-char preview, so one complete
+  agentMessage is retrievable (`--turn <id> --type agentMessage --limit 1`).
+- `wait` pid-checks the job every 5s and reaps orphans, so a dead worker
+  terminates the wait promptly instead of hanging to timeout.
+- `status --wait --timeout-ms 0` means "wait until terminal" (6h safety cap),
+  and background launches print the exact wait command as a wake-up hint.
+- Test suite fixes: spawned companions no longer inherit `CLAUDE_PLUGIN_DATA` /
+  `CODEX_COMPANION_SESSION_ID` from a hosting Claude Code session (18 tests
+  failed when run inside one), and each test file kills the detached
+  brokers/fake app-servers it spawned at exit (previously leaked by the
+  hundreds).
+
 ## 1.4.0 (fork)
 
 Job visibility and launch-control fixes:
