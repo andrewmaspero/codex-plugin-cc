@@ -18,26 +18,8 @@ const TARGETS = [
       }
     ]
   },
-  {
-    file: "package-lock.json",
-    values: [
-      {
-        label: "version",
-        get: (json) => json.version,
-        set: (json, version) => {
-          json.version = version;
-        }
-      },
-      {
-        label: "packages[\"\"].version",
-        get: (json) => json.packages?.[""]?.version,
-        set: (json, version) => {
-          requireObject(json.packages?.[""], "package-lock.json packages[\"\"]");
-          json.packages[""].version = version;
-        }
-      }
-    ]
-  },
+  // package-lock.json intentionally absent: the repo uses pnpm, and
+  // pnpm-lock.yaml does not record the root package version.
   {
     file: "plugins/codex/.claude-plugin/plugin.json",
     values: [
