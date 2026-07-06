@@ -25,12 +25,21 @@ import {
 import { resolveClaudeSessionPath } from "./lib/claude-session-transfer.mjs";
 import { sendBrokerShutdown } from "./lib/broker-lifecycle.mjs";
 import { readStdinIfPiped } from "./lib/fs.mjs";
-import { collectReviewContext, createCodexWorktree, ensureGitRepository, resolveReviewTarget } from "./lib/git.mjs";
+import {
+  collectReviewContext,
+  createCodexWorktree,
+  ensureGitRepository,
+  listCodexWorktrees,
+  pruneCodexWorktrees,
+  resolveReviewTarget,
+  resolveWorktreeRoot
+} from "./lib/git.mjs";
 import { binaryAvailable, isProcessAlive, terminateProcessTree } from "./lib/process.mjs";
 import { loadPromptTemplate, interpolateTemplate } from "./lib/prompts.mjs";
 import {
   generateJobId,
   getConfig,
+  listActiveWorktreePaths,
   listJobs,
   readJobFile,
   resolveJobFileGlobally,
@@ -141,7 +150,8 @@ function printUsage() {
       "  node scripts/codex-companion.mjs alerts [job-id] [--stall-seconds <n>] [--no-goals] [--json]",
       "  node scripts/codex-companion.mjs goal <set|show|clear> [job-id|thread-id] [--budget <tokens>] [--status <status>] [-- <objective>]",
       "  node scripts/codex-companion.mjs artifacts [job-id] [--limit <n>] [--json]",
-      "  node scripts/codex-companion.mjs continue <thread-id> [--background] [--write|--full|--sandbox <mode>] [--worktree|--worktree-name <name>] [--goal <objective>] [--goal-budget <tokens>] [--model <model|spark>] [--effort <none|minimal|low|medium|high|xhigh>] [prompt]"
+      "  node scripts/codex-companion.mjs continue <thread-id> [--background] [--write|--full|--sandbox <mode>] [--worktree|--worktree-name <name>] [--goal <objective>] [--goal-budget <tokens>] [--model <model|spark>] [--effort <none|minimal|low|medium|high|xhigh>] [prompt]",
+      "  node scripts/codex-companion.mjs worktrees [--prune] [--json]"
     ].join("\n")
   );
 }
@@ -236,8 +246,14 @@ function normalizeArgv(argv) {
 function parseCommandInput(argv, config = {}) {
   return parseArgs(normalizeArgv(argv), {
     ...config,
+    // A mistyped flag silently became prompt text before (e.g. `--promt-stdin`
+    // launched a task whose brief was the literal flag); reject unknown flags
+    // for every subcommand instead.
+    strict: config.strict ?? true,
+    booleanOptions: [...(config.booleanOptions ?? []), "help"],
     aliasMap: {
       C: "cwd",
+      h: "help",
       ...(config.aliasMap ?? {})
     }
   });
@@ -1831,6 +1847,51 @@ async function handleContinue(argv) {
   );
 }
 
+function renderWorktreesReport(payload) {
+  const lines = [];
+  if (payload.worktrees.length === 0) {
+    lines.push(`No Codex worktrees found under ${payload.root}.`);
+  } else {
+    lines.push(`Codex worktrees under ${payload.root}:`);
+    for (const entry of payload.worktrees) {
+      const stateLabel = entry.dirty === true ? "dirty" : entry.dirty === false ? "clean" : "unknown";
+      const activeLabel = payload.activePaths.includes(entry.worktreePath) ? " | ACTIVE JOB" : "";
+      lines.push(`${entry.worktreePath} | ${entry.branch ?? "?"} | ${stateLabel}${activeLabel}`);
+    }
+  }
+  if (payload.pruned) {
+    for (const entry of payload.pruned.removed) {
+      lines.push(`Removed ${entry.worktreePath} (${entry.reason}).`);
+    }
+    for (const entry of payload.pruned.kept) {
+      lines.push(`Kept ${entry.worktreePath}: ${entry.reason}.`);
+    }
+    if (payload.pruned.removed.length === 0 && payload.pruned.kept.length === 0) {
+      lines.push("Nothing to prune.");
+    }
+  } else if (payload.worktrees.length > 0) {
+    lines.push("Remove finished ones with `worktrees --prune` (keeps dirty trees and active jobs).");
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+function handleWorktrees(argv) {
+  const { options } = parseCommandInput(argv, {
+    valueOptions: ["cwd"],
+    booleanOptions: ["json", "prune"]
+  });
+
+  const activePaths = listActiveWorktreePaths();
+  const pruned = options.prune ? pruneCodexWorktrees({ keepPaths: activePaths }) : null;
+  const payload = {
+    root: resolveWorktreeRoot(),
+    activePaths,
+    worktrees: listCodexWorktrees(),
+    pruned
+  };
+  outputCommandResult(payload, renderWorktreesReport(payload), options.json);
+}
+
 async function main() {
   const [subcommand, ...argv] = process.argv.slice(2);
   if (!subcommand || subcommand === "help" || subcommand === "--help") {
@@ -1907,6 +1968,9 @@ async function main() {
       break;
     case "continue":
       await handleContinue(argv);
+      break;
+    case "worktrees":
+      handleWorktrees(argv);
       break;
     default:
       throw new Error(`Unknown subcommand: ${subcommand}`);

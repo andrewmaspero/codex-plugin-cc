@@ -310,6 +310,36 @@ export function listActiveJobsByThreadId(threadId) {
   return matches;
 }
 
+/**
+ * Worktree paths referenced by still-active jobs across every workspace state
+ * dir; `worktrees --prune` must never remove a tree a running job executes in.
+ */
+export function listActiveWorktreePaths() {
+  const paths = new Set();
+  for (const stateDir of listStateDirs()) {
+    const stateFile = path.join(stateDir, STATE_FILE_NAME);
+    if (!fs.existsSync(stateFile)) {
+      continue;
+    }
+    let jobs;
+    try {
+      jobs = JSON.parse(fs.readFileSync(stateFile, "utf8")).jobs ?? [];
+    } catch {
+      continue;
+    }
+    for (const job of jobs) {
+      if (job.status !== "running" && job.status !== "queued") {
+        continue;
+      }
+      const worktreePath = job.worktree?.worktreePath ?? null;
+      if (worktreePath) {
+        paths.add(worktreePath);
+      }
+    }
+  }
+  return [...paths];
+}
+
 export function resolveJobFileGlobally(cwd, jobId) {
   const current = findJobInStateDir(resolveStateDir(cwd), jobId);
   if (current) {

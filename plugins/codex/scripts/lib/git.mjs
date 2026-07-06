@@ -122,6 +122,121 @@ export function getRepoRoot(cwd) {
   return gitChecked(cwd, ["rev-parse", "--show-toplevel"]).stdout.trim();
 }
 
+/**
+ * List plugin-created worktrees under the Codex worktree root
+ * (`cc-<name>/<repoName>` directories created by createCodexWorktree).
+ */
+export function listCodexWorktrees(options = {}) {
+  const root = resolveWorktreeRoot(options.env);
+  if (!fs.existsSync(root)) {
+    return [];
+  }
+
+  const entries = [];
+  for (const groupEntry of fs.readdirSync(root, { withFileTypes: true })) {
+    if (!groupEntry.isDirectory() || !groupEntry.name.startsWith("cc-")) {
+      continue;
+    }
+    const groupPath = path.join(root, groupEntry.name);
+    for (const repoEntry of fs.readdirSync(groupPath, { withFileTypes: true })) {
+      if (!repoEntry.isDirectory()) {
+        continue;
+      }
+      const worktreePath = path.join(groupPath, repoEntry.name);
+      const linked = fs.existsSync(path.join(worktreePath, ".git"));
+
+      let branch = null;
+      let dirty = null;
+      let repoRoot = null;
+      if (linked) {
+        const branchResult = git(worktreePath, ["rev-parse", "--abbrev-ref", "HEAD"]);
+        branch = branchResult.status === 0 ? branchResult.stdout.trim() || null : null;
+        const statusResult = git(worktreePath, ["status", "--porcelain"]);
+        dirty = statusResult.status === 0 ? statusResult.stdout.trim().length > 0 : null;
+        const commonDir = git(worktreePath, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
+        if (commonDir.status === 0) {
+          const resolved = commonDir.stdout.trim();
+          repoRoot = resolved.endsWith(`${path.sep}.git`) ? path.dirname(resolved) : resolved;
+        }
+      }
+
+      let modifiedAt = null;
+      try {
+        modifiedAt = fs.statSync(worktreePath).mtime.toISOString();
+      } catch {
+        modifiedAt = null;
+      }
+
+      entries.push({
+        name: groupEntry.name,
+        worktreePath,
+        branch,
+        dirty,
+        linked,
+        repoRoot,
+        modifiedAt
+      });
+    }
+  }
+  return entries.sort((left, right) => left.worktreePath.localeCompare(right.worktreePath));
+}
+
+function removeEmptyWorktreeGroup(worktreePath) {
+  try {
+    fs.rmdirSync(path.dirname(worktreePath));
+  } catch {
+    // Non-empty or already gone.
+  }
+}
+
+/**
+ * Remove plugin-created worktrees that are safe to drop: clean and not in
+ * `keepPaths` (active jobs). Orphaned directories whose repo is gone are
+ * deleted directly. Returns { removed, kept } descriptors.
+ */
+export function pruneCodexWorktrees(options = {}) {
+  const keepPaths = new Set(options.keepPaths ?? []);
+  const removed = [];
+  const kept = [];
+
+  for (const entry of listCodexWorktrees(options)) {
+    if (keepPaths.has(entry.worktreePath)) {
+      kept.push({ ...entry, reason: "active job" });
+      continue;
+    }
+    if (entry.dirty === true) {
+      kept.push({ ...entry, reason: "uncommitted changes" });
+      continue;
+    }
+
+    if (entry.linked && entry.repoRoot && fs.existsSync(entry.repoRoot)) {
+      const removal = git(entry.repoRoot, ["worktree", "remove", entry.worktreePath]);
+      if (removal.status !== 0) {
+        kept.push({
+          ...entry,
+          reason: `git worktree remove failed: ${removal.stderr.trim().split(/\r?\n/)[0] ?? "unknown error"}`
+        });
+        continue;
+      }
+      removeEmptyWorktreeGroup(entry.worktreePath);
+      removed.push({ ...entry, reason: "clean" });
+      continue;
+    }
+
+    // Orphaned directory: the linked repo is gone (or the .git link broke),
+    // so git cannot remove it; delete the directory directly.
+    try {
+      fs.rmSync(entry.worktreePath, { recursive: true, force: true });
+      removeEmptyWorktreeGroup(entry.worktreePath);
+      removed.push({ ...entry, reason: "orphaned (repo missing)" });
+    } catch (error) {
+      kept.push({ ...entry, reason: `delete failed: ${error.message}` });
+    }
+  }
+
+  return { removed, kept };
+}
+
 export function detectDefaultBranch(cwd) {
   const symbolic = git(cwd, ["symbolic-ref", "refs/remotes/origin/HEAD"]);
   if (symbolic.status === 0) {

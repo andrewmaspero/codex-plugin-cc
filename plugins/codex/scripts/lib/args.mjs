@@ -1,7 +1,18 @@
+// A token only counts as a flag when it looks like one (`-x`, `--foo`);
+// bare `-`, negative numbers, and prose fragments stay positional.
+const FLAG_PATTERN = /^-{1,2}[A-Za-z]/;
+
+function rejectUnknownFlag(token) {
+  throw new Error(
+    `Unknown flag "${token}" for this command. Run the command with --help to list supported flags, or put prose that starts with a dash after a bare "--" separator.`
+  );
+}
+
 export function parseArgs(argv, config = {}) {
   const valueOptions = new Set(config.valueOptions ?? []);
   const booleanOptions = new Set(config.booleanOptions ?? []);
   const aliasMap = config.aliasMap ?? {};
+  const strict = Boolean(config.strict);
   const options = {};
   const positionals = [];
   let passthrough = false;
@@ -45,6 +56,9 @@ export function parseArgs(argv, config = {}) {
         continue;
       }
 
+      if (strict && FLAG_PATTERN.test(token)) {
+        rejectUnknownFlag(token);
+      }
       positionals.push(token);
       continue;
     }
@@ -67,6 +81,9 @@ export function parseArgs(argv, config = {}) {
       continue;
     }
 
+    if (strict && FLAG_PATTERN.test(token)) {
+      rejectUnknownFlag(token);
+    }
     positionals.push(token);
   }
 
