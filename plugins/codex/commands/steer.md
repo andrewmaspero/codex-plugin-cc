@@ -17,7 +17,7 @@ heredoc, so the shell performs no expansion on it, and pass ONLY the job id as a
 argv token:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs" steer <JOB_ID> --message-stdin <<'CODEX_STEER_EOF'
+node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mts" steer <JOB_ID> --message-stdin <<'CODEX_STEER_EOF'
 <paste the corrective message here verbatim (everything after the `--`)>
 CODEX_STEER_EOF
 ```

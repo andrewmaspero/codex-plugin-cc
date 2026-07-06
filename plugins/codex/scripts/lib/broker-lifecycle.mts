@@ -5,15 +5,22 @@ import path from "node:path";
 import process from "node:process";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { createBrokerEndpoint, parseBrokerEndpoint } from "./broker-endpoint.mjs";
-import { resolveStateDir } from "./state.mjs";
+import { createBrokerEndpoint, parseBrokerEndpoint } from "./broker-endpoint.mts";
+import { resolveStateDir } from "./state.mts";
 
 export const PID_FILE_ENV = "CODEX_COMPANION_APP_SERVER_PID_FILE";
 export const LOG_FILE_ENV = "CODEX_COMPANION_APP_SERVER_LOG_FILE";
 const BROKER_STATE_FILE = "broker.json";
+const DEFAULT_BROKER_READY_TIMEOUT_MS = 10000;
 
 export function createBrokerSessionDir(prefix = "cxc-") {
-  return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  let tmpDir = os.tmpdir();
+  try {
+    tmpDir = fs.realpathSync.native(tmpDir);
+  } catch {
+    // Fall back to os.tmpdir(); mkdtemp will surface any real filesystem error.
+  }
+  return fs.mkdtempSync(path.join(tmpDir, prefix));
 }
 
 function connectToEndpoint(endpoint) {
@@ -41,7 +48,7 @@ export async function waitForBrokerEndpoint(endpoint, timeoutMs = 2000) {
 }
 
 export async function sendBrokerShutdown(endpoint) {
-  await new Promise((resolve) => {
+  await new Promise<void>((resolve) => {
     const socket = connectToEndpoint(endpoint);
     socket.setEncoding("utf8");
     socket.on("connect", () => {
@@ -110,7 +117,7 @@ async function isBrokerEndpointReady(endpoint) {
   }
 }
 
-export async function ensureBrokerSession(cwd, options = {}) {
+export async function ensureBrokerSession(cwd, options: any = {}) {
   const existing = loadBrokerSession(cwd);
   if (existing && (await isBrokerEndpointReady(existing.endpoint))) {
     return existing;
@@ -135,7 +142,7 @@ export async function ensureBrokerSession(cwd, options = {}) {
   const logFile = path.join(sessionDir, "broker.log");
   const scriptPath =
     options.scriptPath ??
-    fileURLToPath(new URL("../app-server-broker.mjs", import.meta.url));
+    fileURLToPath(new URL("../app-server-broker.mts", import.meta.url));
 
   const child = spawnBrokerProcess({
     scriptPath,
@@ -146,7 +153,7 @@ export async function ensureBrokerSession(cwd, options = {}) {
     env: options.env ?? process.env
   });
 
-  const ready = await waitForBrokerEndpoint(endpoint, options.timeoutMs ?? 2000);
+  const ready = await waitForBrokerEndpoint(endpoint, options.timeoutMs ?? DEFAULT_BROKER_READY_TIMEOUT_MS);
   if (!ready) {
     teardownBrokerSession({
       endpoint,
@@ -175,13 +182,13 @@ export async function ensureBrokerSession(cwd, options = {}) {
  * used to give one background job its own steerable runtime when the shared
  * broker is busy streaming another job. The caller owns teardown.
  */
-export async function createDedicatedBrokerSession(cwd, options = {}) {
+export async function createDedicatedBrokerSession(cwd, options: any = {}) {
   const sessionDir = createBrokerSessionDir("cxc-job-");
   const endpointFactory = options.createBrokerEndpoint ?? createBrokerEndpoint;
   const endpoint = endpointFactory(sessionDir, options.platform);
   const pidFile = path.join(sessionDir, "broker.pid");
   const logFile = path.join(sessionDir, "broker.log");
-  const scriptPath = options.scriptPath ?? fileURLToPath(new URL("../app-server-broker.mjs", import.meta.url));
+  const scriptPath = options.scriptPath ?? fileURLToPath(new URL("../app-server-broker.mts", import.meta.url));
 
   const child = spawnBrokerProcess({
     scriptPath,
@@ -192,7 +199,7 @@ export async function createDedicatedBrokerSession(cwd, options = {}) {
     env: options.env ?? process.env
   });
 
-  const ready = await waitForBrokerEndpoint(endpoint, options.timeoutMs ?? 2000);
+  const ready = await waitForBrokerEndpoint(endpoint, options.timeoutMs ?? DEFAULT_BROKER_READY_TIMEOUT_MS);
   if (!ready) {
     teardownBrokerSession({
       endpoint,

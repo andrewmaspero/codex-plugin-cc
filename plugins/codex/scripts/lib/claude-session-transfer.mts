@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { ensureAbsolutePath } from "./fs.mjs";
+import { ensureAbsolutePath } from "./fs.mts";
 
 export const TRANSCRIPT_PATH_ENV = "CODEX_COMPANION_TRANSCRIPT_PATH";
 const CLAUDE_PROJECTS_DIR = path.join(os.homedir(), ".claude", "projects");
@@ -17,7 +17,7 @@ function resolveUserPath(cwd, value) {
   return ensureAbsolutePath(cwd, value);
 }
 
-export function resolveClaudeSessionPath(cwd, options = {}) {
+export function resolveClaudeSessionPath(cwd, options: any = {}) {
   const requestedPath = options.source || process.env[TRANSCRIPT_PATH_ENV];
   if (!requestedPath) {
     throw new Error("Could not identify the current Claude transcript. Retry with --source <path-to-claude-jsonl>.");

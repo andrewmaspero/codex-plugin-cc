@@ -3,20 +3,17 @@
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "Bundler",
-    "allowJs": true,
-    "checkJs": true,
+    "allowImportingTsExtensions": true,
     "noEmit": true,
     "strict": false,
     "noImplicitAny": false,
     "useUnknownInCatchVariables": false,
+    "erasableSyntaxOnly": true,
     "skipLibCheck": true,
     "types": ["node"]
   },
   "include": [
-    "plugins/codex/scripts/lib/app-server.mjs",
-    "plugins/codex/scripts/lib/codex.mjs",
-    "plugins/codex/scripts/lib/fs.mjs",
-    "plugins/codex/scripts/lib/process.mjs",
+    "plugins/codex/scripts/**/*.mts",
     "plugins/codex/scripts/lib/app-server-protocol.d.ts",
     "plugins/codex/.generated/app-server-types/**/*.ts"
   ]

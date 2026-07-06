@@ -4,7 +4,7 @@
 //    stream goes silent and synthesizes the completion;
 // 2. read-side: status/alerts finalize running jobs whose thread already has
 //    a terminal latest turn (`completed-but-unreconciled`);
-// 3. codex-side: the notify hook (turn-complete-hook.mjs) finalizes jobs when
+// 3. codex-side: the notify hook (turn-complete-hook.mts) finalizes jobs when
 //    codex itself reports the turn finished and the worker never did.
 import fs from "node:fs";
 import path from "node:path";
@@ -15,13 +15,13 @@ import { fileURLToPath } from "node:url";
 
 import { buildEnv, installFakeCodex } from "./fake-codex-fixture.mjs";
 import { initGitRepo, makeTempDir, run } from "./helpers.mjs";
-import { resolveStateDir, upsertJob, writeJobFile } from "../plugins/codex/scripts/lib/state.mjs";
+import { resolveStateDir, upsertJob, writeJobFile } from "../plugins/codex/scripts/lib/state.mts";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PLUGIN_ROOT = path.join(ROOT, "plugins", "codex");
-const SCRIPT = path.join(PLUGIN_ROOT, "scripts", "codex-companion.mjs");
-const HOOK_SCRIPT = path.join(PLUGIN_ROOT, "scripts", "turn-complete-hook.mjs");
-const SESSION_HOOK = path.join(PLUGIN_ROOT, "scripts", "session-lifecycle-hook.mjs");
+const SCRIPT = path.join(PLUGIN_ROOT, "scripts", "codex-companion.mts");
+const HOOK_SCRIPT = path.join(PLUGIN_ROOT, "scripts", "turn-complete-hook.mts");
+const SESSION_HOOK = path.join(PLUGIN_ROOT, "scripts", "session-lifecycle-hook.mts");
 
 function cleanEnv(binDir) {
   const env = buildEnv(binDir);
@@ -254,7 +254,7 @@ test("spawned app-server is configured with the turn-complete notify hook", asyn
     const args = fakeState.lastAppServerArgs ?? [];
     const notifyArg = args.find((arg) => typeof arg === "string" && arg.startsWith("notify=["));
     assert.ok(notifyArg, `expected a notify override in app-server args, got: ${JSON.stringify(args)}`);
-    assert.match(notifyArg, /turn-complete-hook\.mjs/, "notify override does not point at the plugin hook script");
+    assert.match(notifyArg, /turn-complete-hook\.mts/, "notify override does not point at the plugin hook script");
   } finally {
     endSession(repo, env);
   }

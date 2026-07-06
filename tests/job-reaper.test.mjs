@@ -5,10 +5,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { makeTempDir } from "./helpers.mjs";
-import { buildSingleJobSnapshot, buildStatusSnapshot, reapOrphanedJobs } from "../plugins/codex/scripts/lib/job-control.mjs";
-import { buildAlertsSnapshot } from "../plugins/codex/scripts/lib/control-plane.mjs";
-import { listJobs, upsertJob } from "../plugins/codex/scripts/lib/state.mjs";
-import { SESSION_ID_ENV } from "../plugins/codex/scripts/lib/tracked-jobs.mjs";
+import { buildSingleJobSnapshot, buildStatusSnapshot, reapOrphanedJobs } from "../plugins/codex/scripts/lib/job-control.mts";
+import { buildAlertsSnapshot } from "../plugins/codex/scripts/lib/control-plane.mts";
+import { listJobs, upsertJob } from "../plugins/codex/scripts/lib/state.mts";
+import { SESSION_ID_ENV } from "../plugins/codex/scripts/lib/tracked-jobs.mts";
 
 function withoutSessionId(fn) {
   const previous = process.env[SESSION_ID_ENV];

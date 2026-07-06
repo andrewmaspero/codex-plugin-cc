@@ -2,19 +2,31 @@
 // bare `-`, negative numbers, and prose fragments stay positional.
 const FLAG_PATTERN = /^-{1,2}[A-Za-z]/;
 
-function rejectUnknownFlag(token) {
+export interface ParseArgsConfig {
+  valueOptions?: string[];
+  booleanOptions?: string[];
+  aliasMap?: Record<string, string>;
+  strict?: boolean;
+}
+
+export interface ParsedArgs {
+  options: Record<string, string | boolean>;
+  positionals: string[];
+}
+
+function rejectUnknownFlag(token: string): never {
   throw new Error(
     `Unknown flag "${token}" for this command. Run the command with --help to list supported flags, or put prose that starts with a dash after a bare "--" separator.`
   );
 }
 
-export function parseArgs(argv, config = {}) {
+export function parseArgs(argv: string[], config: ParseArgsConfig = {}): ParsedArgs {
   const valueOptions = new Set(config.valueOptions ?? []);
   const booleanOptions = new Set(config.booleanOptions ?? []);
   const aliasMap = config.aliasMap ?? {};
   const strict = Boolean(config.strict);
-  const options = {};
-  const positionals = [];
+  const options: Record<string, string | boolean> = {};
+  const positionals: string[] = [];
   let passthrough = false;
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -90,11 +102,11 @@ export function parseArgs(argv, config = {}) {
   return { options, positionals };
 }
 
-export function splitRawArgumentString(raw) {
-  const tokens = [];
+export function splitRawArgumentString(raw: string): string[] {
+  const tokens: string[] = [];
   const characters = [...raw];
   let current = "";
-  let quote = null;
+  let quote: string | null = null;
   let escaping = false;
 
   for (let index = 0; index < characters.length; index += 1) {

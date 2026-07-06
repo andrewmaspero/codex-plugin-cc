@@ -2,18 +2,18 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { isProbablyText } from "./fs.mjs";
-import { formatCommandFailure, runCommand, runCommandChecked } from "./process.mjs";
+import { isProbablyText } from "./fs.mts";
+import { formatCommandFailure, runCommand, runCommandChecked } from "./process.mts";
 
 const MAX_UNTRACKED_BYTES = 24 * 1024;
 const DEFAULT_INLINE_DIFF_MAX_FILES = 2;
 const DEFAULT_INLINE_DIFF_MAX_BYTES = 256 * 1024;
 
-function git(cwd, args, options = {}) {
+function git(cwd, args, options: any = {}) {
   return runCommand("git", args, { cwd, ...options });
 }
 
-function gitChecked(cwd, args, options = {}) {
+function gitChecked(cwd, args, options: any = {}) {
   return runCommandChecked("git", args, { cwd, ...options });
 }
 
@@ -39,7 +39,7 @@ function normalizeMaxInlineDiffBytes(value) {
 
 function measureGitOutputBytes(cwd, args, maxBytes) {
   const result = git(cwd, args, { maxBuffer: maxBytes + 1 });
-  if (result.error && /** @type {NodeJS.ErrnoException} */ (result.error).code === "ENOBUFS") {
+  if (result.error && (result.error as NodeJS.ErrnoException).code === "ENOBUFS") {
     return maxBytes + 1;
   }
   if (result.error) {
@@ -98,7 +98,7 @@ export function resolveWorktreeRoot(env = process.env) {
  * root (outside the repo, so the main checkout stays clean). Branches are
  * namespaced `codex/<name>` off the current HEAD.
  */
-export function createCodexWorktree(cwd, name, options = {}) {
+export function createCodexWorktree(cwd, name, options: any = {}) {
   ensureGitRepository(cwd);
   const repoRoot = getRepoRoot(cwd);
   const repoName = path.basename(repoRoot) || "repo";
@@ -126,7 +126,7 @@ export function getRepoRoot(cwd) {
  * List plugin-created worktrees under the Codex worktree root
  * (`cc-<name>/<repoName>` directories created by createCodexWorktree).
  */
-export function listCodexWorktrees(options = {}) {
+export function listCodexWorktrees(options: any = {}) {
   const root = resolveWorktreeRoot(options.env);
   if (!fs.existsSync(root)) {
     return [];
@@ -194,7 +194,7 @@ function removeEmptyWorktreeGroup(worktreePath) {
  * `keepPaths` (active jobs). Orphaned directories whose repo is gone are
  * deleted directly. Returns { removed, kept } descriptors.
  */
-export function pruneCodexWorktrees(options = {}) {
+export function pruneCodexWorktrees(options: any = {}) {
   const keepPaths = new Set(options.keepPaths ?? []);
   const removed = [];
   const kept = [];
@@ -278,7 +278,7 @@ export function getWorkingTreeState(cwd) {
   };
 }
 
-export function resolveReviewTarget(cwd, options = {}) {
+export function resolveReviewTarget(cwd, options: any = {}) {
   ensureGitRepository(cwd);
 
   const requestedScope = options.scope ?? "auto";
@@ -368,7 +368,7 @@ function formatUntrackedFile(cwd, relativePath) {
   return [`### ${relativePath}`, "```", buffer.toString("utf8").trimEnd(), "```"].join("\n");
 }
 
-function collectWorkingTreeContext(cwd, state, options = {}) {
+function collectWorkingTreeContext(cwd, state, options: any = {}) {
   const includeDiff = options.includeDiff !== false;
   const status = gitChecked(cwd, ["status", "--short", "--untracked-files=all"]).stdout.trim();
   const changedFiles = listUniqueFiles(state.staged, state.unstaged, state.untracked);
@@ -405,7 +405,7 @@ function collectWorkingTreeContext(cwd, state, options = {}) {
   };
 }
 
-function collectBranchContext(cwd, baseRef, options = {}) {
+function collectBranchContext(cwd, baseRef, options: any = {}) {
   const includeDiff = options.includeDiff !== false;
   const comparison = options.comparison ?? buildBranchComparison(cwd, baseRef);
   const currentBranch = getCurrentBranch(cwd);
@@ -435,7 +435,7 @@ function collectBranchContext(cwd, baseRef, options = {}) {
   };
 }
 
-function buildAdversarialCollectionGuidance(options = {}) {
+function buildAdversarialCollectionGuidance(options: any = {}) {
   if (options.includeDiff !== false) {
     return "Use the repository context below as primary evidence.";
   }
@@ -443,7 +443,7 @@ function buildAdversarialCollectionGuidance(options = {}) {
   return "The repository context below is a lightweight summary. Inspect the target diff yourself with read-only git commands before finalizing findings.";
 }
 
-export function collectReviewContext(cwd, target, options = {}) {
+export function collectReviewContext(cwd, target, options: any = {}) {
   const repoRoot = getRepoRoot(cwd);
   const currentBranch = getCurrentBranch(repoRoot);
   const maxInlineFiles = normalizeMaxInlineFiles(options.maxInlineFiles);

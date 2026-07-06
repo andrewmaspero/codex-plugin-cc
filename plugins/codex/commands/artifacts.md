@@ -4,7 +4,7 @@ argument-hint: '[job-id] [--limit <n>]'
 allowed-tools: Bash(node:*)
 ---
 
-!`node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs" artifacts "$ARGUMENTS"`
+!`node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mts" artifacts "$ARGUMENTS"`
 
 Present the command output exactly.
 

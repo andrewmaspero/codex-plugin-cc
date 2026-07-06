@@ -4,7 +4,7 @@ argument-hint: '[job-id] [--wait] [--timeout-ms <ms, 0 = wait until done>] [--po
 allowed-tools: Bash(node:*)
 ---
 
-!`node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs" status "$ARGUMENTS"`
+!`node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mts" status "$ARGUMENTS"`
 
 If the user did not pass a job ID:
 - Render the command output as a single Markdown table for the current and past runs in this session.

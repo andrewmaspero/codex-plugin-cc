@@ -12,7 +12,7 @@ Run the goal command with a single `Bash` tool call.
 
 - For `goal show` / `goal clear`, or `goal set` whose objective has no shell
   metacharacters, run it directly:
-  `node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs" goal $ARGUMENTS`
+  `node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mts" goal $ARGUMENTS`
 - For `goal set` whose objective contains backticks, quotes, or `$` (common —
   acceptance criteria often cite `commands` and paths), do NOT inline the objective
   into a `!`-prefixed command (it expands inside a double-quoted backtick command
@@ -21,7 +21,7 @@ Run the goal command with a single `Bash` tool call.
   `set` action and optional `<job-id|thread-id>` as argv tokens:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs" goal set <REF> --objective-stdin <<'CODEX_GOAL_EOF'
+node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mts" goal set <REF> --objective-stdin <<'CODEX_GOAL_EOF'
 <paste the objective text here verbatim (everything after the `--`)>
 CODEX_GOAL_EOF
 ```

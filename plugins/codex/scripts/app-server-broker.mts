@@ -5,9 +5,9 @@ import net from "node:net";
 import path from "node:path";
 import process from "node:process";
 
-import { parseArgs } from "./lib/args.mjs";
-import { BROKER_BUSY_RPC_CODE, CodexAppServerClient } from "./lib/app-server.mjs";
-import { parseBrokerEndpoint } from "./lib/broker-endpoint.mjs";
+import { parseArgs } from "./lib/args.mts";
+import { BROKER_BUSY_RPC_CODE, CodexAppServerClient } from "./lib/app-server.mts";
+import { parseBrokerEndpoint } from "./lib/broker-endpoint.mts";
 
 const STREAMING_METHODS = new Set(["turn/start", "review/start", "thread/compact/start"]);
 
@@ -26,7 +26,7 @@ function extractNotificationTurnId(message) {
   return message.params?.turn?.id ?? message.params?.turnId ?? null;
 }
 
-function buildJsonRpcError(code, message, data) {
+function buildJsonRpcError(code, message, data = undefined) {
   return data === undefined ? { code, message } : { code, message, data };
 }
 
@@ -57,7 +57,7 @@ function writePidFile(pidFile) {
 async function main() {
   const [subcommand, ...argv] = process.argv.slice(2);
   if (subcommand !== "serve") {
-    throw new Error("Usage: node scripts/app-server-broker.mjs serve --endpoint <value> [--cwd <path>] [--pid-file <path>]");
+    throw new Error("Usage: node scripts/app-server-broker.mts serve --endpoint <value> [--cwd <path>] [--pid-file <path>]");
   }
 
   const { options } = parseArgs(argv, {
@@ -68,10 +68,10 @@ async function main() {
     throw new Error("Missing required --endpoint.");
   }
 
-  const cwd = options.cwd ? path.resolve(process.cwd(), options.cwd) : process.cwd();
+  const cwd = options.cwd ? path.resolve(process.cwd(), String(options.cwd)) : process.cwd();
   const endpoint = String(options.endpoint);
   const listenTarget = parseBrokerEndpoint(endpoint);
-  const pidFile = options["pid-file"] ? path.resolve(options["pid-file"]) : null;
+  const pidFile = options["pid-file"] ? path.resolve(String(options["pid-file"])) : null;
   writePidFile(pidFile);
 
   const appClient = await CodexAppServerClient.connect(cwd, { disableBroker: true });
@@ -86,7 +86,7 @@ async function main() {
   // While a streaming request is in flight, capture turn/started ids for its
   // thread so a turn that starts before the response resolves is not lost.
   let pendingStreamCapture = null;
-  const sockets = new Set();
+  const sockets = new Set<net.Socket>();
 
   function clearSocketOwnership(socket) {
     if (activeRequestSocket === socket) {

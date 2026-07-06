@@ -1,49 +1,62 @@
-/**
- * @typedef {import("./app-server-protocol").AppServerNotification} AppServerNotification
- * @typedef {import("./app-server-protocol").ReviewTarget} ReviewTarget
- * @typedef {import("./app-server-protocol").ThreadItem} ThreadItem
- * @typedef {import("./app-server-protocol").ThreadResumeParams} ThreadResumeParams
- * @typedef {import("./app-server-protocol").ThreadStartParams} ThreadStartParams
- * @typedef {import("./app-server-protocol").Turn} Turn
- * @typedef {import("./app-server-protocol").UserInput} UserInput
- * @typedef {((update: string | { message: string, phase: string | null, threadId?: string | null, turnId?: string | null, stderrMessage?: string | null, logTitle?: string | null, logBody?: string | null }) => void)} ProgressReporter
- * @typedef {{
- *   threadId: string,
- *   rootThreadId: string,
- *   threadIds: Set<string>,
- *   threadTurnIds: Map<string, string>,
- *   threadLabels: Map<string, string>,
- *   turnId: string | null,
- *   rootTurnSource: "response" | "started" | "adopted" | null,
- *   bufferedNotifications: AppServerNotification[],
- *   completion: Promise<TurnCaptureState>,
- *   resolveCompletion: (state: TurnCaptureState) => void,
- *   rejectCompletion: (error: unknown) => void,
- *   finalTurn: Turn | null,
- *   completed: boolean,
- *   finalAnswerSeen: boolean,
- *   pendingCollaborations: Set<string>,
- *   activeSubagentTurns: Set<string>,
- *   completionTimer: ReturnType<typeof setTimeout> | null,
- *   lastAgentMessage: string,
- *   reviewText: string,
- *   reasoningSummary: string[],
- *   error: unknown,
- *   messages: Array<{ lifecycle: string, phase: string | null, text: string }>,
- *   fileChanges: ThreadItem[],
- *   commandExecutions: ThreadItem[],
- *   onProgress: ProgressReporter | null
- * }} TurnCaptureState
- */
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type {
+  AppServerNotification,
+  ReviewTarget,
+  ThreadItem,
+  ThreadResumeParams,
+  ThreadStartParams,
+  Turn,
+  UserInput
+} from "./app-server-protocol.d.ts";
 
-import { readJsonFile } from "./fs.mjs";
-import { BROKER_BUSY_RPC_CODE, BROKER_ENDPOINT_ENV, CodexAppServerClient } from "./app-server.mjs";
-import { clearBrokerSession, createDedicatedBrokerSession, loadBrokerSession, sendBrokerShutdown, teardownBrokerSession } from "./broker-lifecycle.mjs";
-import { binaryAvailable, terminateProcessTree } from "./process.mjs";
+import { readJsonFile } from "./fs.mts";
+import { BROKER_BUSY_RPC_CODE, BROKER_ENDPOINT_ENV, CodexAppServerClient } from "./app-server.mts";
+import { clearBrokerSession, createDedicatedBrokerSession, loadBrokerSession, sendBrokerShutdown, teardownBrokerSession } from "./broker-lifecycle.mts";
+import { binaryAvailable, terminateProcessTree } from "./process.mts";
+
+type ProgressUpdate =
+  | string
+  | {
+      message: string;
+      phase: string | null;
+      threadId?: string | null;
+      turnId?: string | null;
+      stderrMessage?: string | null;
+      logTitle?: string | null;
+      logBody?: string | null;
+    };
+type ProgressReporter = (update: ProgressUpdate) => void;
+
+interface TurnCaptureState {
+  threadId: string;
+  rootThreadId: string;
+  threadIds: Set<string>;
+  threadTurnIds: Map<string, string>;
+  threadLabels: Map<string, string>;
+  turnId: string | null;
+  rootTurnSource: "response" | "started" | "adopted" | null;
+  bufferedNotifications: AppServerNotification[];
+  completion: Promise<TurnCaptureState>;
+  resolveCompletion: (state: TurnCaptureState) => void;
+  rejectCompletion: (error: unknown) => void;
+  finalTurn: Turn | null;
+  completed: boolean;
+  finalAnswerSeen: boolean;
+  pendingCollaborations: Set<string>;
+  activeSubagentTurns: Set<string>;
+  completionTimer: ReturnType<typeof setTimeout> | null;
+  lastAgentMessage: string;
+  reviewText: string;
+  reasoningSummary: string[];
+  error: unknown;
+  messages: Array<{ lifecycle: string; phase: string | null; text: string }>;
+  fileChanges: ThreadItem[];
+  commandExecutions: ThreadItem[];
+  onProgress: ProgressReporter | null;
+}
 
 const SERVICE_NAME = "claude_code_codex_plugin";
 const TASK_THREAD_PREFIX = "Codex Companion Task";
@@ -61,7 +74,7 @@ function cleanCodexStderr(stderr) {
 }
 
 /** @returns {ThreadStartParams} */
-function buildThreadParams(cwd, options = {}) {
+function buildThreadParams(cwd, options: any = {}) {
   return {
     cwd,
     model: options.model ?? null,
@@ -73,7 +86,7 @@ function buildThreadParams(cwd, options = {}) {
 }
 
 /** @returns {ThreadResumeParams} */
-function buildResumeParams(threadId, cwd, options = {}) {
+function buildResumeParams(threadId, cwd, options: any = {}) {
   return {
     threadId,
     cwd,
@@ -212,7 +225,7 @@ function mergeReasoningSections(existingSections, nextSections) {
  * @param {string | null | undefined} message
  * @param {string | null | undefined} [phase]
  */
-function emitProgress(onProgress, message, phase = null, extra = {}) {
+function emitProgress(onProgress, message, phase = null, extra: any = {}) {
   if (!onProgress || !message) {
     return;
   }
@@ -223,7 +236,7 @@ function emitProgress(onProgress, message, phase = null, extra = {}) {
   onProgress({ message, phase, ...extra });
 }
 
-function emitLogEvent(onProgress, options = {}) {
+function emitLogEvent(onProgress, options: any = {}) {
   if (!onProgress) {
     return;
   }
@@ -244,7 +257,7 @@ function labelForThread(state, threadId) {
   return state.threadLabels.get(threadId) ?? threadId;
 }
 
-function registerThread(state, threadId, options = {}) {
+function registerThread(state, threadId, options: any = {}) {
   if (!threadId) {
     return;
   }
@@ -323,11 +336,10 @@ function describeCompletedItem(state, item) {
   }
 }
 
-/** @returns {TurnCaptureState} */
-function createTurnCaptureState(threadId, options = {}) {
-  let resolveCompletion;
-  let rejectCompletion;
-  const completion = new Promise((resolve, reject) => {
+function createTurnCaptureState(threadId: string, options: { onProgress?: ProgressReporter | null } = {}): TurnCaptureState {
+  let resolveCompletion!: (state: TurnCaptureState) => void;
+  let rejectCompletion!: (error: unknown) => void;
+  const completion = new Promise<TurnCaptureState>((resolve, reject) => {
     resolveCompletion = resolve;
     rejectCompletion = reject;
   });
@@ -371,7 +383,7 @@ function clearCompletionTimer(state) {
   }
 }
 
-function completeTurn(state, turn = null, options = {}) {
+function completeTurn(state, turn = null, options: any = {}) {
   if (state.completed) {
     return;
   }
@@ -687,7 +699,7 @@ const DEFAULT_IDLE_RECONCILE_MS = 60000;
 const IDLE_RECONCILE_ENV = "CODEX_COMPANION_IDLE_RECONCILE_MS";
 const TERMINAL_TURN_STATUSES = new Set(["completed", "failed", "interrupted"]);
 
-function resolveIdleReconcileMs(options = {}) {
+function resolveIdleReconcileMs(options: any = {}) {
   const fromEnv = Number(process.env[IDLE_RECONCILE_ENV]);
   if (Number.isFinite(fromEnv) && fromEnv >= 0) {
     return fromEnv;
@@ -757,7 +769,7 @@ function startIdleReconciler(client, state, idleMs, getLastEventAt) {
   return timer;
 }
 
-async function captureTurn(client, threadId, startRequest, options = {}) {
+async function captureTurn(client, threadId, startRequest, options: any = {}) {
   const state = createTurnCaptureState(threadId, options);
   const previousHandler = client.notificationHandler;
   let lastEventAt = Date.now();
@@ -920,7 +932,7 @@ export async function withAppServer(cwd, fn) {
  * @param {(client: InstanceType<typeof CodexAppServerClient> | any) => Promise<any>} fn
  * @param {{ onEndpoint?: ((endpoint: string | null, transport: "shared" | "dedicated" | "direct" | "closed") => void) | null }} [options]
  */
-async function withSteerableAppServer(cwd, fn, options = {}) {
+async function withSteerableAppServer(cwd, fn, options: any = {}) {
   const onEndpoint = options.onEndpoint ?? null;
   let client = null;
   try {
@@ -1063,7 +1075,7 @@ async function requestExternalAgentSessionImport(client, params) {
   }
 }
 
-async function startThread(client, cwd, options = {}) {
+async function startThread(client, cwd, options: any = {}) {
   const response = await client.request("thread/start", buildThreadParams(cwd, options));
   const threadId = response.thread.id;
   if (options.threadName) {
@@ -1081,7 +1093,7 @@ async function startThread(client, cwd, options = {}) {
   return response;
 }
 
-async function resumeThread(client, threadId, cwd, options = {}) {
+async function resumeThread(client, threadId, cwd, options: any = {}) {
   return client.request("thread/resume", buildResumeParams(threadId, cwd, options));
 }
 
@@ -1111,7 +1123,7 @@ function formatProviderLabel(providerId, providerConfig = null) {
   return BUILTIN_PROVIDER_LABELS.get(providerId) ?? providerId;
 }
 
-function buildAuthStatus(fields = {}) {
+function buildAuthStatus(fields: any = {}) {
   return {
     available: true,
     loggedIn: false,
@@ -1256,7 +1268,7 @@ export function getSessionRuntimeStatus(env = process.env, cwd = process.cwd()) 
   };
 }
 
-export async function getCodexAuthStatus(cwd, options = {}) {
+export async function getCodexAuthStatus(cwd, options: any = {}) {
   const availability = getCodexAvailability(cwd);
   if (!availability.available) {
     return {
@@ -1429,7 +1441,7 @@ export async function requestThreadGoal(cwd, method, params, { brokerEndpoint = 
   }
 }
 
-export async function runAppServerReview(cwd, options = {}) {
+export async function runAppServerReview(cwd, options: any = {}) {
   const availability = getCodexAvailability(cwd);
   if (!availability.available) {
     throw new Error("Codex CLI is not installed or is missing required runtime support. Install it with `npm install -g @openai/codex`, then rerun `/codex:setup`.");
@@ -1485,7 +1497,7 @@ export async function runAppServerReview(cwd, options = {}) {
   });
 }
 
-export async function importExternalAgentSession(cwd, options = {}) {
+export async function importExternalAgentSession(cwd, options: any = {}) {
   const availability = getCodexAvailability(cwd);
   if (!availability.available) {
     throw new Error("Codex CLI is not installed or is missing required runtime support. Install it with `npm install -g @openai/codex`, then rerun `/codex:setup`.");
@@ -1538,7 +1550,7 @@ export async function teardownWorkspaceBrokerSession(cwd) {
   return true;
 }
 
-export async function runAppServerTurn(cwd, options = {}) {
+export async function runAppServerTurn(cwd, options: any = {}) {
   const availability = getCodexAvailability(cwd);
   if (!availability.available) {
     throw new Error("Codex CLI is not installed or is missing required runtime support. Install it with `npm install -g @openai/codex`, then rerun `/codex:setup`.");
@@ -1658,7 +1670,7 @@ export function buildPersistentTaskThreadName(prompt) {
   return buildTaskThreadName(prompt);
 }
 
-export function parseStructuredOutput(rawOutput, fallback = {}) {
+export function parseStructuredOutput(rawOutput, fallback: any = {}) {
   if (!rawOutput) {
     return {
       parsed: null,

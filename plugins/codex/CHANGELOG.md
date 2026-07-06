@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.5.0 (fork)
+
+Runtime TypeScript migration.
+
+- Migrated the plugin runtime scripts from `.mjs` to native `.mts` TypeScript executed directly by Node type stripping; there is still no build step or compiled output.
+- Raised the runtime requirement to Node.js 22.18+ and surfaced that requirement in `/codex:setup` readiness output and companion startup errors.
+- Expanded TypeScript checking to include all plugin runtime `.mts` files with `erasableSyntaxOnly` enabled, and added concrete state/job/protocol record types for the control plane.
+
 ## 1.4.2 (fork)
 
 Silent job-death elimination: streaming, reconciliation, and instrumentation.
@@ -14,7 +22,7 @@ Silent job-death elimination: streaming, reconciliation, and instrumentation.
   turn instead). Verified against the real codex-cli 0.140.0 both ways.
 - Durable turn-completion finalization, three independent layers:
   - every plugin-spawned `codex app-server` is configured with
-    `-c notify=[node, turn-complete-hook.mjs]`; codex itself invokes the hook
+    `-c notify=[node, turn-complete-hook.mts]`; codex itself invokes the hook
     when a turn finishes and the hook finalizes any job for that thread whose
     worker died or hung (grace-window + log-activity guarded);
   - workers poll `thread/turns/list` after 60s of event silence and

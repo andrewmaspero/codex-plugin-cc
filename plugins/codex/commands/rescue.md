@@ -26,7 +26,7 @@ Execution mode:
 - Otherwise, before starting Codex, check for a resumable rescue thread from this Claude session by running:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs" task-resume-candidate --json
+node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mts" task-resume-candidate --json
 ```
 
 - If that helper reports `available: true`, use `AskUserQuestion` exactly once to ask whether to continue the current Codex thread or start a new one.
@@ -41,11 +41,11 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs" task-resume-candidate -
 
 Operating rules:
 
-- The subagent is a thin forwarder only. It should use one `Bash` call to invoke `node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs" task ...` and return that command's stdout as-is.
+- The subagent is a thin forwarder only. It should use one `Bash` call to invoke `node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mts" task ...` and return that command's stdout as-is.
 - If the forwarded task prompt spans multiple lines or contains shell metacharacters such as backticks, quotes, `$`, `$(...)`, parentheses, semicolons, pipes, redirects, or braces, the subagent must pass the prompt over stdin with `--prompt-stdin` instead of placing it in argv:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs" task --background --prompt-stdin <<'CODEX_TASK_EOF'
+node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mts" task --background --prompt-stdin <<'CODEX_TASK_EOF'
 <verbatim prompt text>
 CODEX_TASK_EOF
 ```

@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 
 import { spawn } from "node:child_process";
+import type { StdioOptions } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
-import { parseArgs, splitRawArgumentString } from "./lib/args.mjs";
+import { parseArgs, splitRawArgumentString } from "./lib/args.mts";
 import {
     buildPersistentTaskThreadName,
     DEFAULT_CONTINUE_PROMPT,
@@ -21,10 +22,10 @@ import {
     runAppServerReview,
     runAppServerTurn,
     teardownWorkspaceBrokerSession
-  } from "./lib/codex.mjs";
-import { resolveClaudeSessionPath } from "./lib/claude-session-transfer.mjs";
-import { sendBrokerShutdown } from "./lib/broker-lifecycle.mjs";
-import { readStdinIfPiped } from "./lib/fs.mjs";
+  } from "./lib/codex.mts";
+import { resolveClaudeSessionPath } from "./lib/claude-session-transfer.mts";
+import { sendBrokerShutdown } from "./lib/broker-lifecycle.mts";
+import { readStdinIfPiped } from "./lib/fs.mts";
 import {
   collectReviewContext,
   createCodexWorktree,
@@ -33,9 +34,9 @@ import {
   pruneCodexWorktrees,
   resolveReviewTarget,
   resolveWorktreeRoot
-} from "./lib/git.mjs";
-import { binaryAvailable, isProcessAlive, terminateProcessTree } from "./lib/process.mjs";
-import { loadPromptTemplate, interpolateTemplate } from "./lib/prompts.mjs";
+} from "./lib/git.mts";
+import { binaryAvailable, isProcessAlive, terminateProcessTree } from "./lib/process.mts";
+import { loadPromptTemplate, interpolateTemplate } from "./lib/prompts.mts";
 import {
   generateJobId,
   getConfig,
@@ -46,7 +47,7 @@ import {
   setConfig,
   upsertJob,
   writeJobFile
-} from "./lib/state.mjs";
+} from "./lib/state.mts";
 import {
   buildSingleJobSnapshot,
   buildStatusSnapshot,
@@ -55,7 +56,7 @@ import {
   resolveCancelableJob,
   resolveResultJob,
   sortJobsNewestFirst
-} from "./lib/job-control.mjs";
+} from "./lib/job-control.mts";
 import {
   buildAlertsSnapshot,
   clearGoal,
@@ -79,7 +80,7 @@ import {
   steerJob,
   tailJobLog,
   validateGoalObjective
-} from "./lib/control-plane.mjs";
+} from "./lib/control-plane.mts";
 import {
   appendLogLine,
   createJobLogFile,
@@ -89,8 +90,8 @@ import {
   nowIso,
   runTrackedJob,
   SESSION_ID_ENV
-} from "./lib/tracked-jobs.mjs";
-import { resolveWorkspaceRoot } from "./lib/workspace.mjs";
+} from "./lib/tracked-jobs.mts";
+import { resolveWorkspaceRoot } from "./lib/workspace.mts";
 import {
   renderNativeReviewResult,
   renderReviewResult,
@@ -100,7 +101,7 @@ import {
   renderSetupReport,
   renderStatusReport,
   renderTaskResult
-} from "./lib/render.mjs";
+} from "./lib/render.mts";
 
 const ROOT_DIR = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const REVIEW_SCHEMA = path.join(ROOT_DIR, "schemas", "review-output.schema.json");
@@ -117,6 +118,8 @@ const WAIT_REAP_INTERVAL_MS = 5000;
 const WAIT_TURN_RECONCILE_INTERVAL_MS = 30000;
 const VALID_REASONING_EFFORTS = new Set(["none", "minimal", "low", "medium", "high", "xhigh"]);
 const MODEL_ALIASES = new Map([["spark", "gpt-5.3-codex-spark"]]);
+const MIN_NODE_VERSION = { major: 22, minor: 18, patch: 0 };
+const MIN_NODE_VERSION_LABEL = "22.18.0";
 const SANDBOX_ALIASES = new Map([
   ["read-only", "read-only"],
   ["readonly", "read-only"],
@@ -132,26 +135,26 @@ function printUsage() {
   console.log(
     [
       "Usage:",
-      "  node scripts/codex-companion.mjs setup [--enable-review-gate|--disable-review-gate] [--sandbox <read-only|write|full|clear>] [--json]",
-      "  node scripts/codex-companion.mjs review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>]",
-      "  node scripts/codex-companion.mjs adversarial-review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [focus text]",
-      "  node scripts/codex-companion.mjs task [--background] [--write|--full|--sandbox <mode>] [--worktree|--worktree-name <name>] [--goal <objective>] [--goal-budget <tokens>] [--resume-last|--resume|--fresh] [--model <model|spark>] [--effort <none|minimal|low|medium|high|xhigh>] [prompt]",
-      "  node scripts/codex-companion.mjs transfer [--source <claude-jsonl>] [--json]",
-      "  node scripts/codex-companion.mjs status [job-id] [--all] [--wait] [--timeout-ms <ms, 0 = until done>] [--poll-interval-ms <ms>] [--json]",
-      "  node scripts/codex-companion.mjs wait <job-id> [--timeout <seconds>]",
-      "  node scripts/codex-companion.mjs result [job-id] [--full|--max-chars <n>] [--json]",
-      "  node scripts/codex-companion.mjs cancel [job-id] [--json]",
-      "  node scripts/codex-companion.mjs steer <job-id> -- <short corrective instruction>",
-      "  node scripts/codex-companion.mjs threads [--limit <n>] [--cursor <cursor>] [--search <term>] [--all] [--json]",
-      "  node scripts/codex-companion.mjs thread <thread-id> [--json]",
-      "  node scripts/codex-companion.mjs turns <thread-id> [--limit <n>] [--cursor <cursor>] [--json]",
-      "  node scripts/codex-companion.mjs items <thread-id> [--turn <turn-id>] [--type <t1,t2>] [--limit <n>] [--cursor <cursor>] [--budget <chars>] [--json]",
-      "  node scripts/codex-companion.mjs tail [job-id] [--lines <n>] [--json]",
-      "  node scripts/codex-companion.mjs alerts [job-id] [--stall-seconds <n>] [--no-goals] [--json]",
-      "  node scripts/codex-companion.mjs goal <set|show|clear> [job-id|thread-id] [--budget <tokens>] [--status <status>] [-- <objective>]",
-      "  node scripts/codex-companion.mjs artifacts [job-id] [--limit <n>] [--json]",
-      "  node scripts/codex-companion.mjs continue <thread-id> [--background] [--write|--full|--sandbox <mode>] [--worktree|--worktree-name <name>] [--goal <objective>] [--goal-budget <tokens>] [--model <model|spark>] [--effort <none|minimal|low|medium|high|xhigh>] [prompt]",
-      "  node scripts/codex-companion.mjs worktrees [--prune] [--json]"
+      "  node scripts/codex-companion.mts setup [--enable-review-gate|--disable-review-gate] [--sandbox <read-only|write|full|clear>] [--json]",
+      "  node scripts/codex-companion.mts review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>]",
+      "  node scripts/codex-companion.mts adversarial-review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [focus text]",
+      "  node scripts/codex-companion.mts task [--background] [--write|--full|--sandbox <mode>] [--worktree|--worktree-name <name>] [--goal <objective>] [--goal-budget <tokens>] [--resume-last|--resume|--fresh] [--model <model|spark>] [--effort <none|minimal|low|medium|high|xhigh>] [prompt]",
+      "  node scripts/codex-companion.mts transfer [--source <claude-jsonl>] [--json]",
+      "  node scripts/codex-companion.mts status [job-id] [--all] [--wait] [--timeout-ms <ms, 0 = until done>] [--poll-interval-ms <ms>] [--json]",
+      "  node scripts/codex-companion.mts wait <job-id> [--timeout <seconds>]",
+      "  node scripts/codex-companion.mts result [job-id] [--full|--max-chars <n>] [--json]",
+      "  node scripts/codex-companion.mts cancel [job-id] [--json]",
+      "  node scripts/codex-companion.mts steer <job-id> -- <short corrective instruction>",
+      "  node scripts/codex-companion.mts threads [--limit <n>] [--cursor <cursor>] [--search <term>] [--all] [--json]",
+      "  node scripts/codex-companion.mts thread <thread-id> [--json]",
+      "  node scripts/codex-companion.mts turns <thread-id> [--limit <n>] [--cursor <cursor>] [--json]",
+      "  node scripts/codex-companion.mts items <thread-id> [--turn <turn-id>] [--type <t1,t2>] [--limit <n>] [--cursor <cursor>] [--budget <chars>] [--json]",
+      "  node scripts/codex-companion.mts tail [job-id] [--lines <n>] [--json]",
+      "  node scripts/codex-companion.mts alerts [job-id] [--stall-seconds <n>] [--no-goals] [--json]",
+      "  node scripts/codex-companion.mts goal <set|show|clear> [job-id|thread-id] [--budget <tokens>] [--status <status>] [-- <objective>]",
+      "  node scripts/codex-companion.mts artifacts [job-id] [--limit <n>] [--json]",
+      "  node scripts/codex-companion.mts continue <thread-id> [--background] [--write|--full|--sandbox <mode>] [--worktree|--worktree-name <name>] [--goal <objective>] [--goal-budget <tokens>] [--model <model|spark>] [--effort <none|minimal|low|medium|high|xhigh>] [prompt]",
+      "  node scripts/codex-companion.mts worktrees [--prune] [--json]"
     ].join("\n")
   );
 }
@@ -166,6 +169,53 @@ function outputResult(value, asJson) {
 
 function outputCommandResult(payload, rendered, asJson) {
   outputResult(asJson ? payload : rendered, asJson);
+}
+
+function parseNodeVersion(version) {
+  const match = String(version ?? "").replace(/^v/, "").match(/^(\d+)\.(\d+)\.(\d+)/);
+  if (!match) {
+    return null;
+  }
+  return {
+    major: Number(match[1]),
+    minor: Number(match[2]),
+    patch: Number(match[3])
+  };
+}
+
+function isNodeVersionAtLeast(version, minimum) {
+  if (!version) {
+    return false;
+  }
+  if (version.major !== minimum.major) {
+    return version.major > minimum.major;
+  }
+  if (version.minor !== minimum.minor) {
+    return version.minor > minimum.minor;
+  }
+  return version.patch >= minimum.patch;
+}
+
+function getNodeRuntimeStatus() {
+  const parsed = parseNodeVersion(process.versions.node);
+  const satisfiesMinimum = isNodeVersionAtLeast(parsed, MIN_NODE_VERSION);
+  return {
+    available: true,
+    version: process.version,
+    satisfiesMinimum,
+    detail: satisfiesMinimum
+      ? `${process.version} (native TypeScript type stripping supported)`
+      : `${process.version} (requires Node >=${MIN_NODE_VERSION_LABEL} for native .mts type stripping)`
+  };
+}
+
+function assertSupportedNodeRuntime() {
+  const status = getNodeRuntimeStatus();
+  if (!status.satisfiesMinimum) {
+    throw new Error(
+      `Codex companion requires Node >=${MIN_NODE_VERSION_LABEL} because runtime scripts are native .mts files executed with Node type stripping. Current Node: ${process.version}.`
+    );
+  }
 }
 
 function normalizeRequestedModel(model) {
@@ -243,7 +293,7 @@ function normalizeArgv(argv) {
   return argv;
 }
 
-function parseCommandInput(argv, config = {}) {
+function parseCommandInput(argv, config: any = {}) {
   return parseArgs(normalizeArgv(argv), {
     ...config,
     // A mistyped flag silently became prompt text before (e.g. `--promt-stdin`
@@ -263,11 +313,11 @@ function hasHelpFlag(argv) {
   return argv.includes("-h") || argv.includes("--help");
 }
 
-function resolveCommandCwd(options = {}) {
+function resolveCommandCwd(options: any = {}) {
   return options.cwd ? path.resolve(process.cwd(), options.cwd) : process.cwd();
 }
 
-function resolveCommandWorkspace(options = {}) {
+function resolveCommandWorkspace(options: any = {}) {
   return resolveWorkspaceRoot(resolveCommandCwd(options));
 }
 
@@ -296,13 +346,16 @@ function firstMeaningfulLine(text, fallback) {
 
 async function buildSetupReport(cwd, actionsTaken = []) {
   const workspaceRoot = resolveWorkspaceRoot(cwd);
-  const nodeStatus = binaryAvailable("node", ["--version"], { cwd });
+  const nodeStatus = getNodeRuntimeStatus();
   const npmStatus = binaryAvailable("npm", ["--version"], { cwd });
   const codexStatus = getCodexAvailability(cwd);
   const authStatus = await getCodexAuthStatus(cwd);
   const config = getConfig(workspaceRoot);
 
   const nextSteps = [];
+  if (!nodeStatus.satisfiesMinimum) {
+    nextSteps.push(`Install or select Node.js ${MIN_NODE_VERSION_LABEL} or newer; native .mts type stripping is required.`);
+  }
   if (!codexStatus.available) {
     nextSteps.push("Install Codex with `npm install -g @openai/codex`.");
   }
@@ -315,7 +368,7 @@ async function buildSetupReport(cwd, actionsTaken = []) {
   }
 
   return {
-    ready: nodeStatus.available && codexStatus.available && authStatus.loggedIn,
+    ready: nodeStatus.satisfiesMinimum && codexStatus.available && authStatus.loggedIn,
     node: nodeStatus,
     npm: npmStatus,
     codex: codexStatus,
@@ -443,7 +496,7 @@ function findLatestResumableTaskJob(jobs) {
   );
 }
 
-async function waitForSingleJobSnapshot(cwd, reference, options = {}) {
+async function waitForSingleJobSnapshot(cwd, reference, options: any = {}) {
   const rawTimeoutMs = Number(options.timeoutMs);
   const timeoutMs = !Number.isFinite(rawTimeoutMs)
     ? DEFAULT_STATUS_WAIT_TIMEOUT_MS
@@ -478,7 +531,18 @@ function readWaitStatus(jobFile) {
   return readJobFile(jobFile).status ?? "unknown";
 }
 
-async function waitForGlobalJob(cwd, jobId, options = {}) {
+interface WaitForGlobalJobResult {
+  found: boolean;
+  status: string | null;
+  timedOut: boolean;
+}
+
+interface StoredTaskWorkerRequest {
+  kind?: string;
+  [key: string]: unknown;
+}
+
+async function waitForGlobalJob(cwd, jobId, options: any = {}): Promise<WaitForGlobalJobResult> {
   const workspaceRoot = resolveWorkspaceRoot(cwd);
   const resolved = resolveJobFileGlobally(workspaceRoot, jobId);
   if (!resolved) {
@@ -596,7 +660,7 @@ async function waitForGlobalJob(cwd, jobId, options = {}) {
   });
 }
 
-async function resolveLatestTrackedTaskThread(cwd, options = {}) {
+async function resolveLatestTrackedTaskThread(cwd, options: any = {}) {
   const workspaceRoot = resolveWorkspaceRoot(cwd);
   const sessionId = getCurrentClaudeSessionId();
   const jobs = sortJobsNewestFirst(listJobs(workspaceRoot)).filter((job) => job.id !== options.excludeJobId);
@@ -928,7 +992,7 @@ function createCompanionJob({ prefix, kind, title, workspaceRoot, jobClass, summ
   });
 }
 
-function createTrackedProgress(job, options = {}) {
+function createTrackedProgress(job, options: any = {}) {
   const logFile = options.logFile ?? createJobLogFile(job.workspaceRoot, job.id, job.title);
   return {
     logFile,
@@ -940,7 +1004,7 @@ function createTrackedProgress(job, options = {}) {
   };
 }
 
-function buildTaskJob(workspaceRoot, taskMetadata, execution = {}) {
+function buildTaskJob(workspaceRoot, taskMetadata, execution: any = {}) {
   return createCompanionJob({
     prefix: "task",
     kind: "task",
@@ -1011,7 +1075,7 @@ function renderTransferResult(payload) {
   return `${lines.join("\n")}\n`;
 }
 
-async function executeTransfer(cwd, options = {}) {
+async function executeTransfer(cwd, options: any = {}) {
   const sourcePath = resolveClaudeSessionPath(cwd, {
     source: options.source
   });
@@ -1048,7 +1112,7 @@ function requireTaskRequest(prompt, resumeLast) {
   }
 }
 
-async function runForegroundCommand(job, runner, options = {}) {
+async function runForegroundCommand(job, runner, options: any = {}) {
   const { logFile, progress } = createTrackedProgress(job, {
     logFile: options.logFile,
     stderr: !options.json
@@ -1062,11 +1126,11 @@ async function runForegroundCommand(job, runner, options = {}) {
 }
 
 function spawnDetachedTaskWorker(cwd, jobId, logFile = null) {
-  const scriptPath = path.join(ROOT_DIR, "scripts", "codex-companion.mjs");
+  const scriptPath = path.join(ROOT_DIR, "scripts", "codex-companion.mts");
   // Route worker stdout/stderr into the job log: a crashing worker's stack
   // trace is otherwise discarded (stdio "ignore"), which made silent worker
   // deaths undiagnosable (OBS-B).
-  let stdio = "ignore";
+  let stdio: StdioOptions = "ignore";
   let logFd = null;
   if (logFile) {
     try {
@@ -1124,7 +1188,7 @@ function enqueueBackgroundTask(cwd, job, request) {
 // The command a controller should run as a background task to be woken exactly
 // when the job reaches a terminal state (completed/failed/cancelled).
 function buildStatusWaitHint(jobId) {
-  const script = process.argv[1] ?? "scripts/codex-companion.mjs";
+  const script = process.argv[1] ?? "scripts/codex-companion.mts";
   return `node "${script}" status ${jobId} --wait --timeout-ms 0 --json`;
 }
 
@@ -1379,7 +1443,7 @@ async function handleTaskWorker(argv) {
   let lastGaspLogFile = storedJob.logFile ?? null;
   registerWorkerLastGasp(workspaceRoot, options["job-id"], () => lastGaspLogFile);
 
-  const request = storedJob.request;
+  const request = storedJob.request as StoredTaskWorkerRequest | undefined;
   if (!request || typeof request !== "object") {
     throw new Error(`Stored job ${options["job-id"]} is missing its task request payload.`);
   }
@@ -1893,6 +1957,7 @@ function handleWorktrees(argv) {
 }
 
 async function main() {
+  assertSupportedNodeRuntime();
   const [subcommand, ...argv] = process.argv.slice(2);
   if (!subcommand || subcommand === "help" || subcommand === "--help") {
     printUsage();

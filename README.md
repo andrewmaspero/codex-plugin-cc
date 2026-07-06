@@ -33,7 +33,7 @@ Fork additions (control-plane):
 
 - **ChatGPT subscription (incl. Free) or OpenAI API key.**
   - Usage will contribute to your Codex usage limits. [Learn more](https://developers.openai.com/codex/pricing).
-- **Node.js 18.18 or later**
+- **Node.js 22.18 or later**. The plugin runtime is native `.mts` TypeScript executed by Node's type stripping, with no build step or compiled output.
 
 ## Install
 

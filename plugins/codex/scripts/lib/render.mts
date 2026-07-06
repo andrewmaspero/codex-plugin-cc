@@ -121,7 +121,7 @@ function appendActiveJobsTable(lines, jobs) {
   }
 }
 
-function pushJobDetails(lines, job, options = {}) {
+function pushJobDetails(lines, job, options: any = {}) {
   lines.push(`- ${formatJobLine(job)}`);
   if (job.summary) {
     lines.push(`  Summary: ${job.summary}`);

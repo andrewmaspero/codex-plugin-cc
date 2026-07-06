@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import process from "node:process";
 
-export function runCommand(command, args = [], options = {}) {
+export function runCommand(command, args = [], options: any = {}) {
   const result = spawnSync(command, args, {
     cwd: options.cwd,
     env: options.env,
@@ -24,7 +24,7 @@ export function runCommand(command, args = [], options = {}) {
   };
 }
 
-export function runCommandChecked(command, args = [], options = {}) {
+export function runCommandChecked(command, args = [], options: any = {}) {
   const result = runCommand(command, args, options);
   if (result.error) {
     throw result.error;
@@ -35,9 +35,9 @@ export function runCommandChecked(command, args = [], options = {}) {
   return result;
 }
 
-export function binaryAvailable(command, versionArgs = ["--version"], options = {}) {
+export function binaryAvailable(command, versionArgs = ["--version"], options: any = {}) {
   const result = runCommand(command, versionArgs, options);
-  if (result.error && /** @type {NodeJS.ErrnoException} */ (result.error).code === "ENOENT") {
+  if (result.error && (result.error as NodeJS.ErrnoException).code === "ENOENT") {
     return { available: false, detail: "not found" };
   }
   if (result.error) {
@@ -56,7 +56,7 @@ function looksLikeMissingProcessMessage(text) {
 
 // Returns true/false when liveness is knowable, null when the pid is unusable.
 // EPERM means "alive but not ours", so it counts as alive.
-export function isProcessAlive(pid, options = {}) {
+export function isProcessAlive(pid, options: any = {}) {
   if (!Number.isFinite(pid) || pid <= 0) {
     return null;
   }
@@ -69,7 +69,7 @@ export function isProcessAlive(pid, options = {}) {
   }
 }
 
-export function terminateProcessTree(pid, options = {}) {
+export function terminateProcessTree(pid, options: any = {}) {
   if (!Number.isFinite(pid)) {
     return { attempted: false, delivered: false, method: null };
   }

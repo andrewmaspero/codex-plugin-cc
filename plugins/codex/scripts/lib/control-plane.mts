@@ -11,13 +11,14 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 
-import { BROKER_BUSY_RPC_CODE, CodexAppServerClient } from "./app-server.mjs";
-import { requestThreadGoal, steerAppServerTurn } from "./codex.mjs";
-import { listJobs, readJobFile, resolveJobFile, resolveJobFileGlobally, updateState, upsertJob, writeJobFile } from "./state.mjs";
-import { enrichJob, reapOrphanedJobs, sortJobsNewestFirst } from "./job-control.mjs";
-import { isProcessAlive } from "./process.mjs";
-import { appendLogLine, SESSION_ID_ENV } from "./tracked-jobs.mjs";
-import { resolveWorkspaceRoot } from "./workspace.mjs";
+import { BROKER_BUSY_RPC_CODE, CodexAppServerClient } from "./app-server.mts";
+import { requestThreadGoal, steerAppServerTurn } from "./codex.mts";
+import { listJobs, readJobFile, resolveJobFile, resolveJobFileGlobally, updateState, upsertJob, writeJobFile } from "./state.mts";
+import type { JobFilePayload } from "./state.mts";
+import { enrichJob, reapOrphanedJobs, sortJobsNewestFirst } from "./job-control.mts";
+import { isProcessAlive } from "./process.mts";
+import { appendLogLine, SESSION_ID_ENV } from "./tracked-jobs.mts";
+import { resolveWorkspaceRoot } from "./workspace.mts";
 
 export const STEER_SOFT_WORD_LIMIT = 300;
 export const STEER_HARD_WORD_LIMIT = 800;
@@ -281,7 +282,7 @@ function compactGoal(goal) {
   };
 }
 
-export async function setGoal(cwd, reference, objective, options = {}) {
+export async function setGoal(cwd, reference, objective, options: any = {}) {
   const normalized = validateGoalObjective(objective);
   const target = resolveGoalTarget(cwd, reference);
   const response = await requestThreadGoal(
@@ -452,7 +453,7 @@ function compactItem(item, textLimit = 400) {
 
 function compactTurn(turn) {
   const items = turn.items ?? [];
-  const itemCounts = {};
+  const itemCounts: any = {};
   for (const item of items) {
     itemCounts[item.type] = (itemCounts[item.type] ?? 0) + 1;
   }
@@ -473,7 +474,7 @@ function compactTurn(turn) {
   };
 }
 
-export async function listThreadsCompact(cwd, options = {}) {
+export async function listThreadsCompact(cwd, options: any = {}) {
   const workspaceRoot = resolveWorkspaceRoot(cwd);
   const limit = Math.max(1, Math.min(Number(options.limit) || DEFAULT_THREADS_LIMIT, 50));
 
@@ -538,7 +539,7 @@ async function fetchTurnPages(client, threadId, { cursor = null, limit = TURNS_P
   return { turns, nextCursor, usedFallback };
 }
 
-export async function listTurnsCompact(cwd, options = {}) {
+export async function listTurnsCompact(cwd, options: any = {}) {
   const workspaceRoot = resolveWorkspaceRoot(cwd);
   const limit = Math.max(1, Math.min(Number(options.limit) || DEFAULT_TURNS_LIMIT, 50));
 
@@ -557,7 +558,7 @@ export async function listTurnsCompact(cwd, options = {}) {
   });
 }
 
-export async function listItemsCompact(cwd, options = {}) {
+export async function listItemsCompact(cwd, options: any = {}) {
   const workspaceRoot = resolveWorkspaceRoot(cwd);
   const limit = Math.max(1, Math.min(Number(options.limit) || DEFAULT_ITEMS_LIMIT, 100));
   const budgetChars = Math.max(500, Number(options.budgetChars) || DEFAULT_ITEMS_BUDGET_CHARS);
@@ -707,7 +708,7 @@ export function renderItemList(payload) {
 
 // --- tail -----------------------------------------------------------------
 
-export function tailJobLog(cwd, reference, options = {}) {
+export function tailJobLog(cwd, reference, options: any = {}) {
   const workspaceRoot = resolveWorkspaceRoot(cwd);
   const jobs = sortJobsNewestFirst(listJobs(workspaceRoot));
   const globalMatch = reference ? resolveJobFileGlobally(workspaceRoot, reference) : null;
@@ -765,7 +766,7 @@ function walkArtifactFiles(dir, baseDir, collected, limit) {
  * Purely local; the brief convention tells Codex to save screenshots and
  * evidence there so the controller can Read individual files on demand.
  */
-export function listJobArtifacts(cwd, reference = "", options = {}) {
+export function listJobArtifacts(cwd, reference = "", options: any = {}) {
   const workspaceRoot = resolveWorkspaceRoot(cwd);
   const jobs = sortJobsNewestFirst(listJobs(workspaceRoot));
   const globalMatch = reference ? resolveJobFileGlobally(workspaceRoot, reference) : null;
@@ -856,7 +857,7 @@ function finalizeReconciledJob(workspaceRoot, job, latestTurn, status, lastAgent
   }
 
   const jobFile = resolveJobFile(workspaceRoot, job.id);
-  let stored = {};
+  let stored: JobFilePayload = {};
   try {
     stored = fs.existsSync(jobFile) ? readJobFile(jobFile) : {};
   } catch {
@@ -885,7 +886,7 @@ function finalizeReconciledJob(workspaceRoot, job, latestTurn, status, lastAgent
  * job instead of waiting on a worker that will never write again.
  * Returns descriptors of the jobs it reconciled.
  */
-export async function reconcileCompletedTurnJobs(cwd, jobs, options = {}) {
+export async function reconcileCompletedTurnJobs(cwd, jobs, options: any = {}) {
   const envQuietMs = Number(process.env.CODEX_COMPANION_RECONCILE_QUIET_MS);
   const quietMs =
     Number.isFinite(envQuietMs) && envQuietMs > 0
@@ -958,7 +959,7 @@ function stripLogTimestamp(line) {
   return line.replace(/^\[[^\]]+\]\s*/, "");
 }
 
-export function buildJobAlerts(job, options = {}) {
+export function buildJobAlerts(job, options: any = {}) {
   const now = options.now ?? Date.now();
   const stallSeconds = Math.max(30, Number(options.stallSeconds) || DEFAULT_STALL_SECONDS);
   const alerts = [];
@@ -1090,7 +1091,7 @@ async function collectGoalAlerts(cwd, jobs) {
   return { alerts, checkErrors };
 }
 
-export async function buildAlertsSnapshot(cwd, reference = "", options = {}) {
+export async function buildAlertsSnapshot(cwd, reference = "", options: any = {}) {
   const workspaceRoot = resolveWorkspaceRoot(cwd);
   // Reap dead workers before building alerts so an orphan surfaces as a
   // terminal "failed" alert (and status pollers stop waiting on it) instead

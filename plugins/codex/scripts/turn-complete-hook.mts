@@ -18,8 +18,9 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 
-import { listActiveJobsByThreadId, readJobFile, resolveJobFile, updateState, writeJobFile } from "./lib/state.mjs";
-import { appendLogLine, nowIso } from "./lib/tracked-jobs.mjs";
+import { listActiveJobsByThreadId, readJobFile, resolveJobFile, updateState, writeJobFile } from "./lib/state.mts";
+import type { JobFilePayload } from "./lib/state.mts";
+import { appendLogLine, nowIso } from "./lib/tracked-jobs.mts";
 
 const GRACE_MS = Math.max(0, Number(process.env.CODEX_COMPANION_HOOK_GRACE_MS) || 8000);
 const POLL_MS = Math.min(1000, Math.max(50, GRACE_MS || 50));
@@ -97,7 +98,7 @@ function finalizeJob(match, payload) {
   }
 
   const jobFile = resolveJobFile(workspaceRoot, match.job.id);
-  let stored = {};
+  let stored: JobFilePayload = {};
   try {
     stored = fs.existsSync(jobFile) ? readJobFile(jobFile) : {};
   } catch {

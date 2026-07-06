@@ -1,21 +1,29 @@
-/**
- * @typedef {Error & { data?: unknown, rpcCode?: number }} ProtocolError
- * @typedef {import("./app-server-protocol").AppServerMethod} AppServerMethod
- * @typedef {import("./app-server-protocol").AppServerNotification} AppServerNotification
- * @typedef {import("./app-server-protocol").AppServerNotificationHandler} AppServerNotificationHandler
- * @typedef {import("./app-server-protocol").ClientInfo} ClientInfo
- * @typedef {import("./app-server-protocol").CodexAppServerClientOptions} CodexAppServerClientOptions
- * @typedef {import("./app-server-protocol").InitializeCapabilities} InitializeCapabilities
- */
 import fs from "node:fs";
 import net from "node:net";
 import process from "node:process";
 import { spawn } from "node:child_process";
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
-import { parseBrokerEndpoint } from "./broker-endpoint.mjs";
-import { ensureBrokerSession, loadBrokerSession } from "./broker-lifecycle.mjs";
-import { terminateProcessTree } from "./process.mjs";
+import type {
+  AppServerMethod,
+  AppServerNotification,
+  AppServerNotificationHandler,
+  AppServerRequestParams,
+  AppServerResponse,
+  ClientInfo,
+  CodexAppServerClientOptions,
+  InitializeCapabilities
+} from "./app-server-protocol.d.ts";
+import { parseBrokerEndpoint } from "./broker-endpoint.mts";
+import { ensureBrokerSession, loadBrokerSession } from "./broker-lifecycle.mts";
+import { terminateProcessTree } from "./process.mts";
+
+type ProtocolError = Error & { data?: unknown; rpcCode?: number };
+type PendingRequest = {
+  resolve: (value: any) => void;
+  reject: (reason?: any) => void;
+  method: AppServerMethod | string;
+};
 
 const PLUGIN_MANIFEST_URL = new URL("../../.claude-plugin/plugin.json", import.meta.url);
 const PLUGIN_MANIFEST = JSON.parse(fs.readFileSync(PLUGIN_MANIFEST_URL, "utf8"));
@@ -24,28 +32,26 @@ export const BROKER_ENDPOINT_ENV = "CODEX_COMPANION_APP_SERVER_ENDPOINT";
 export const BROKER_BUSY_RPC_CODE = -32001;
 export const DISABLE_TURN_HOOK_ENV = "CODEX_COMPANION_DISABLE_TURN_HOOK";
 
-const TURN_COMPLETE_HOOK_URL = new URL("../turn-complete-hook.mjs", import.meta.url);
+const TURN_COMPLETE_HOOK_URL = new URL("../turn-complete-hook.mts", import.meta.url);
 
 /**
  * `-c notify=[...]` argv for `codex app-server`: codex invokes the plugin's
  * turn-complete hook with an agent-turn-complete payload whenever a turn
  * finishes, making job finalization durable even if the worker process dies
- * or its event stream drops (see scripts/turn-complete-hook.mjs).
+ * or its event stream drops (see scripts/turn-complete-hook.mts).
  */
 export function buildTurnCompleteNotifyArgs(execPath = process.execPath) {
   const hookPath = fileURLToPath(TURN_COMPLETE_HOOK_URL);
   return ["-c", `notify=[${JSON.stringify(execPath)},${JSON.stringify(hookPath)}]`];
 }
 
-/** @type {ClientInfo} */
-const DEFAULT_CLIENT_INFO = {
+const DEFAULT_CLIENT_INFO: ClientInfo = {
   title: "Codex Plugin",
   name: "Claude Code",
   version: PLUGIN_MANIFEST.version ?? "0.0.0"
 };
 
-/** @type {InitializeCapabilities} */
-const DEFAULT_CAPABILITIES = {
+const DEFAULT_CAPABILITIES: InitializeCapabilities = {
   // Required for the experimental `thread/turns/list` / `thread/items/list`
   // read APIs used by the token-efficient thread viewer commands.
   experimentalApi: true,
@@ -58,7 +64,7 @@ const DEFAULT_CAPABILITIES = {
   ]
 };
 
-function buildJsonRpcError(code, message, data) {
+function buildJsonRpcError(code, message, data = undefined) {
   return data === undefined ? { code, message } : { code, message, data };
 }
 
@@ -71,8 +77,8 @@ function withTimeout(promise, ms, message) {
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
-function createProtocolError(message, data) {
-  const error = /** @type {ProtocolError} */ (new Error(message));
+function createProtocolError(message, data = undefined): ProtocolError {
+  const error: ProtocolError = new Error(message);
   error.data = data;
   if (data?.code !== undefined) {
     error.rpcCode = data.code;
@@ -81,7 +87,26 @@ function createProtocolError(message, data) {
 }
 
 class AppServerClientBase {
-  constructor(cwd, options = {}) {
+  cwd: string;
+  options: any;
+  pending: Map<number, PendingRequest>;
+  nextId: number;
+  stderr: string;
+  closed: boolean;
+  exitError: Error | null;
+  notificationHandler: AppServerNotificationHandler | null;
+  lineBuffer: string;
+  transport: string;
+  exitPromise: Promise<void>;
+  resolveExit!: (value: void) => void;
+  exitResolved?: boolean;
+  proc?: any;
+  readline?: readline.Interface;
+  socket?: net.Socket;
+  endpoint?: string;
+  turnCompleteHookEnabled?: boolean;
+
+  constructor(cwd: string, options: CodexAppServerClientOptions & Record<string, any> = {}) {
     this.cwd = cwd;
     this.options = options;
     this.pending = new Map();
@@ -89,12 +114,11 @@ class AppServerClientBase {
     this.stderr = "";
     this.closed = false;
     this.exitError = null;
-    /** @type {AppServerNotificationHandler | null} */
     this.notificationHandler = null;
     this.lineBuffer = "";
     this.transport = "unknown";
 
-    this.exitPromise = new Promise((resolve) => {
+    this.exitPromise = new Promise<void>((resolve) => {
       this.resolveExit = resolve;
     });
   }
@@ -103,13 +127,7 @@ class AppServerClientBase {
     this.notificationHandler = handler;
   }
 
-  /**
-   * @template {AppServerMethod} M
-   * @param {M} method
-   * @param {import("./app-server-protocol").AppServerRequestParams<M>} params
-   * @returns {Promise<import("./app-server-protocol").AppServerResponse<M>>}
-   */
-  request(method, params) {
+  request<M extends AppServerMethod>(method: M, params: AppServerRequestParams<M>): Promise<AppServerResponse<M>> {
     if (this.closed) {
       throw new Error("codex app-server client is closed.");
     }
@@ -123,7 +141,7 @@ class AppServerClientBase {
     });
   }
 
-  notify(method, params = {}) {
+  notify(method, params: any = {}) {
     if (this.closed) {
       return;
     }
@@ -175,7 +193,7 @@ class AppServerClientBase {
     }
 
     if (message.method && this.notificationHandler) {
-      this.notificationHandler(/** @type {AppServerNotification} */ (message));
+      this.notificationHandler(message as AppServerNotification);
     }
   }
 
@@ -186,7 +204,7 @@ class AppServerClientBase {
     });
   }
 
-  handleExit(error) {
+  handleExit(error = undefined) {
     if (this.exitResolved) {
       return;
     }
@@ -207,7 +225,7 @@ class AppServerClientBase {
 }
 
 class SpawnedCodexAppServerClient extends AppServerClientBase {
-  constructor(cwd, options = {}) {
+  constructor(cwd: string, options: CodexAppServerClientOptions & Record<string, any> = {}) {
     super(cwd, options);
     this.transport = "direct";
     const env = options.env ?? process.env;
@@ -309,7 +327,7 @@ class SpawnedCodexAppServerClient extends AppServerClientBase {
 }
 
 class BrokerCodexAppServerClient extends AppServerClientBase {
-  constructor(cwd, options = {}) {
+  constructor(cwd: string, options: CodexAppServerClientOptions & Record<string, any> = {}) {
     super(cwd, options);
     this.transport = "broker";
     this.endpoint = options.brokerEndpoint;
@@ -370,7 +388,7 @@ class BrokerCodexAppServerClient extends AppServerClientBase {
 }
 
 export class CodexAppServerClient {
-  static async connect(cwd, options = {}) {
+  static async connect(cwd, options: any = {}) {
     let brokerEndpoint = null;
     if (!options.disableBroker) {
       brokerEndpoint = options.brokerEndpoint ?? options.env?.[BROKER_ENDPOINT_ENV] ?? process.env[BROKER_ENDPOINT_ENV] ?? null;

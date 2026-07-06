@@ -4,6 +4,6 @@ argument-hint: '<thread-id>'
 allowed-tools: Bash(node:*)
 ---
 
-!`node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs" thread "$ARGUMENTS"`
+!`node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mts" thread "$ARGUMENTS"`
 
 Present the command output exactly. Never fetch or render the full thread transcript; use `/codex:turns` and `/codex:items` for bounded slices.

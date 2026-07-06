@@ -7,13 +7,13 @@ import { fileURLToPath } from "node:url";
 
 import { buildEnv, installFakeCodex } from "./fake-codex-fixture.mjs";
 import { initGitRepo, makeTempDir, run } from "./helpers.mjs";
-import { resolveStateDir } from "../plugins/codex/scripts/lib/state.mjs";
-import { parseBrokerEndpoint } from "../plugins/codex/scripts/lib/broker-endpoint.mjs";
+import { resolveStateDir } from "../plugins/codex/scripts/lib/state.mts";
+import { parseBrokerEndpoint } from "../plugins/codex/scripts/lib/broker-endpoint.mts";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PLUGIN_ROOT = path.join(ROOT, "plugins", "codex");
-const SCRIPT = path.join(PLUGIN_ROOT, "scripts", "codex-companion.mjs");
-const SESSION_HOOK = path.join(PLUGIN_ROOT, "scripts", "session-lifecycle-hook.mjs");
+const SCRIPT = path.join(PLUGIN_ROOT, "scripts", "codex-companion.mts");
+const SESSION_HOOK = path.join(PLUGIN_ROOT, "scripts", "session-lifecycle-hook.mts");
 
 function cleanEnv(binDir) {
   const env = buildEnv(binDir);

@@ -6,12 +6,12 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-import { getCodexAvailability } from "./lib/codex.mjs";
-import { loadPromptTemplate, interpolateTemplate } from "./lib/prompts.mjs";
-import { getConfig, listJobs } from "./lib/state.mjs";
-import { sortJobsNewestFirst } from "./lib/job-control.mjs";
-import { SESSION_ID_ENV } from "./lib/tracked-jobs.mjs";
-import { resolveWorkspaceRoot } from "./lib/workspace.mjs";
+import { getCodexAvailability } from "./lib/codex.mts";
+import { loadPromptTemplate, interpolateTemplate } from "./lib/prompts.mts";
+import { getConfig, listJobs } from "./lib/state.mts";
+import { sortJobsNewestFirst } from "./lib/job-control.mts";
+import { SESSION_ID_ENV } from "./lib/tracked-jobs.mts";
+import { resolveWorkspaceRoot } from "./lib/workspace.mts";
 
 const STOP_REVIEW_TIMEOUT_MS = 15 * 60 * 1000;
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -37,7 +37,7 @@ function logNote(message) {
   process.stderr.write(`${message}\n`);
 }
 
-function filterJobsForCurrentSession(jobs, input = {}) {
+function filterJobsForCurrentSession(jobs, input: any = {}) {
   const sessionId = input.session_id || process.env[SESSION_ID_ENV] || null;
   if (!sessionId) {
     return jobs;
@@ -45,7 +45,7 @@ function filterJobsForCurrentSession(jobs, input = {}) {
   return jobs.filter((job) => job.sessionId === sessionId);
 }
 
-function buildStopReviewPrompt(input = {}) {
+function buildStopReviewPrompt(input: any = {}) {
   const lastAssistantMessage = String(input.last_assistant_message ?? "").trim();
   const template = loadPromptTemplate(ROOT_DIR, "stop-review-gate");
   const claudeResponseBlock = lastAssistantMessage
@@ -95,8 +95,8 @@ function parseStopReviewOutput(rawOutput) {
   };
 }
 
-function runStopReview(cwd, input = {}) {
-  const scriptPath = path.join(SCRIPT_DIR, "codex-companion.mjs");
+function runStopReview(cwd, input: any = {}) {
+  const scriptPath = path.join(SCRIPT_DIR, "codex-companion.mts");
   const prompt = buildStopReviewPrompt(input);
   const childEnv = {
     ...process.env,
@@ -109,7 +109,7 @@ function runStopReview(cwd, input = {}) {
     timeout: STOP_REVIEW_TIMEOUT_MS
   });
 
-  if (result.error?.code === "ETIMEDOUT") {
+  if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") {
     return {
       ok: false,
       reason:

@@ -4,6 +4,6 @@ argument-hint: '[--limit <n>] [--cursor <cursor>] [--search <term>] [--all]'
 allowed-tools: Bash(node:*)
 ---
 
-!`node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs" threads "$ARGUMENTS"`
+!`node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mts" threads "$ARGUMENTS"`
 
 Present the command output exactly. It is already compact; do not expand it, fetch thread contents, or add commentary.

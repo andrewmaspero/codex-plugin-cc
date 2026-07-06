@@ -4,6 +4,6 @@ argument-hint: '<thread-id> [--turn <turn-id>] [--type <userMessage,agentMessage
 allowed-tools: Bash(node:*)
 ---
 
-!`node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs" items "$ARGUMENTS"`
+!`node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mts" items "$ARGUMENTS"`
 
 Present the command output exactly. If the output reports truncation, narrow with `--turn` or `--type` before raising `--budget`.

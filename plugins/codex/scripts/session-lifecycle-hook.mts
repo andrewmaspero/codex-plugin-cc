@@ -3,8 +3,8 @@
 import fs from "node:fs";
 import process from "node:process";
 
-import { terminateProcessTree } from "./lib/process.mjs";
-import { BROKER_ENDPOINT_ENV } from "./lib/app-server.mjs";
+import { terminateProcessTree } from "./lib/process.mts";
+import { BROKER_ENDPOINT_ENV } from "./lib/app-server.mts";
 import {
   clearBrokerSession,
   LOG_FILE_ENV,
@@ -12,10 +12,10 @@ import {
   PID_FILE_ENV,
   sendBrokerShutdown,
   teardownBrokerSession
-} from "./lib/broker-lifecycle.mjs";
-import { loadState, resolveStateFile, updateState } from "./lib/state.mjs";
-import { TRANSCRIPT_PATH_ENV } from "./lib/claude-session-transfer.mjs";
-import { resolveWorkspaceRoot } from "./lib/workspace.mjs";
+} from "./lib/broker-lifecycle.mts";
+import { loadState, resolveStateFile, updateState } from "./lib/state.mts";
+import { TRANSCRIPT_PATH_ENV } from "./lib/claude-session-transfer.mts";
+import { resolveWorkspaceRoot } from "./lib/workspace.mts";
 
 export const SESSION_ID_ENV = "CODEX_COMPANION_SESSION_ID";
 const PLUGIN_DATA_ENV = "CLAUDE_PLUGIN_DATA";

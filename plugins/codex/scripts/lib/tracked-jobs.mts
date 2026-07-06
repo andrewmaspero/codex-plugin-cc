@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import process from "node:process";
 
-import { readJobFile, resolveJobFile, resolveJobLogFile, upsertJob, writeJobFile } from "./state.mjs";
+import { readJobFile, resolveJobFile, resolveJobLogFile, upsertJob, writeJobFile } from "./state.mts";
+import type { JobPatch } from "./state.mts";
 
 export const SESSION_ID_ENV = "CODEX_COMPANION_SESSION_ID";
 
@@ -57,7 +58,7 @@ export function createJobLogFile(workspaceRoot, jobId, title) {
   return logFile;
 }
 
-export function createJobRecord(base, options = {}) {
+export function createJobRecord(base, options: any = {}) {
   const env = options.env ?? process.env;
   const sessionId = env[options.sessionIdEnv ?? SESSION_ID_ENV];
   return {
@@ -74,7 +75,7 @@ export function createJobProgressUpdater(workspaceRoot, jobId) {
 
   return (event) => {
     const normalized = normalizeProgressEvent(event);
-    const patch = { id: jobId };
+    const patch: JobPatch = { id: jobId };
     let changed = false;
 
     if (normalized.phase && normalized.phase !== lastPhase) {
@@ -139,7 +140,7 @@ function readStoredJobOrNull(workspaceRoot, jobId) {
   return readJobFile(jobFile);
 }
 
-export async function runTrackedJob(job, runner, options = {}) {
+export async function runTrackedJob(job, runner, options: any = {}) {
   const runningRecord = {
     ...job,
     status: "running",

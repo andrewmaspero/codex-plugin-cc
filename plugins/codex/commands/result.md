@@ -4,7 +4,7 @@ argument-hint: '[job-id] [--full|--max-chars <n>]'
 allowed-tools: Bash(node:*)
 ---
 
-!`node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs" result "$ARGUMENTS"`
+!`node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mts" result "$ARGUMENTS"`
 
 Present the command output to the user exactly. Do not summarize or condense it. Preserve all details including:
 - Job ID and status

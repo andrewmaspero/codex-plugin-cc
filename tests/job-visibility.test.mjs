@@ -11,7 +11,7 @@ import { buildEnv, installFakeCodex } from "./fake-codex-fixture.mjs";
 import { initGitRepo, makeTempDir, run } from "./helpers.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const SCRIPT = path.join(ROOT, "plugins", "codex", "scripts", "codex-companion.mjs");
+const SCRIPT = path.join(ROOT, "plugins", "codex", "scripts", "codex-companion.mts");
 
 function uniqueJobId(prefix) {
   return `${prefix}-${process.pid}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
