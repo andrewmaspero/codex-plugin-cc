@@ -93,6 +93,8 @@ const ROOT_DIR = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const REVIEW_SCHEMA = path.join(ROOT_DIR, "schemas", "review-output.schema.json");
 const DEFAULT_STATUS_WAIT_TIMEOUT_MS = 240000;
 const DEFAULT_STATUS_POLL_INTERVAL_MS = 2000;
+// `status --wait --timeout-ms 0` means "wait until the job finishes", bounded by this safety cap.
+const UNBOUNDED_STATUS_WAIT_TIMEOUT_MS = 21600000;
 const VALID_REASONING_EFFORTS = new Set(["none", "minimal", "low", "medium", "high", "xhigh"]);
 const MODEL_ALIASES = new Map([["spark", "gpt-5.3-codex-spark"]]);
 const SANDBOX_ALIASES = new Map([
@@ -115,7 +117,7 @@ function printUsage() {
       "  node scripts/codex-companion.mjs adversarial-review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [focus text]",
       "  node scripts/codex-companion.mjs task [--background] [--write|--full|--sandbox <mode>] [--worktree|--worktree-name <name>] [--goal <objective>] [--goal-budget <tokens>] [--resume-last|--resume|--fresh] [--model <model|spark>] [--effort <none|minimal|low|medium|high|xhigh>] [prompt]",
       "  node scripts/codex-companion.mjs transfer [--source <claude-jsonl>] [--json]",
-      "  node scripts/codex-companion.mjs status [job-id] [--all] [--json]",
+      "  node scripts/codex-companion.mjs status [job-id] [--all] [--wait] [--timeout-ms <ms, 0 = until done>] [--poll-interval-ms <ms>] [--json]",
       "  node scripts/codex-companion.mjs result [job-id] [--full|--max-chars <n>] [--json]",
       "  node scripts/codex-companion.mjs cancel [job-id] [--json]",
       "  node scripts/codex-companion.mjs steer <job-id> -- <short corrective instruction>",
@@ -410,7 +412,12 @@ function findLatestResumableTaskJob(jobs) {
 }
 
 async function waitForSingleJobSnapshot(cwd, reference, options = {}) {
-  const timeoutMs = Math.max(0, Number(options.timeoutMs) || DEFAULT_STATUS_WAIT_TIMEOUT_MS);
+  const rawTimeoutMs = Number(options.timeoutMs);
+  const timeoutMs = !Number.isFinite(rawTimeoutMs)
+    ? DEFAULT_STATUS_WAIT_TIMEOUT_MS
+    : rawTimeoutMs === 0
+      ? UNBOUNDED_STATUS_WAIT_TIMEOUT_MS
+      : Math.max(0, rawTimeoutMs);
   const pollIntervalMs = Math.max(100, Number(options.pollIntervalMs) || DEFAULT_STATUS_POLL_INTERVAL_MS);
   const deadline = Date.now() + timeoutMs;
   let snapshot = buildSingleJobSnapshot(cwd, reference);
@@ -703,6 +710,9 @@ function renderQueuedTaskLaunch(payload) {
   if (payload.sandbox && payload.sandbox !== "read-only") {
     lines.push(`Sandbox: ${payload.sandbox}.`);
   }
+  if (payload.waitCommand) {
+    lines.push(`To be woken the moment it finishes, run this as a background Bash task: ${payload.waitCommand}`);
+  }
   return `${lines.join("\n")}\n`;
 }
 
@@ -888,10 +898,18 @@ function enqueueBackgroundTask(cwd, job, request) {
       summary: job.summary,
       sandbox: job.sandbox ?? null,
       worktree: job.worktree ?? null,
-      logFile
+      logFile,
+      waitCommand: buildStatusWaitHint(job.id)
     },
     logFile
   };
+}
+
+// The command a controller should run as a background task to be woken exactly
+// when the job reaches a terminal state (completed/failed/cancelled).
+function buildStatusWaitHint(jobId) {
+  const script = process.argv[1] ?? "scripts/codex-companion.mjs";
+  return `node "${script}" status ${jobId} --wait --timeout-ms 0 --json`;
 }
 
 async function handleReviewCommand(argv, config) {

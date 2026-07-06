@@ -1,6 +1,6 @@
 ---
 description: Show active and recent Codex jobs for this repository, including review-gate status
-argument-hint: '[job-id] [--wait] [--timeout-ms <ms>] [--poll-interval-ms <ms>] [--all]'
+argument-hint: '[job-id] [--wait] [--timeout-ms <ms, 0 = wait until done>] [--poll-interval-ms <ms>] [--all]'
 allowed-tools: Bash(node:*)
 ---
 

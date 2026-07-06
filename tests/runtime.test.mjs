@@ -938,6 +938,10 @@ test("task --background enqueues a detached worker and exposes per-job status", 
   const launchPayload = JSON.parse(launched.stdout);
   assert.equal(launchPayload.status, "queued");
   assert.match(launchPayload.jobId, /^task-/);
+  assert.match(
+    launchPayload.waitCommand ?? "",
+    new RegExp(`status ${launchPayload.jobId} --wait --timeout-ms 0 --json`)
+  );
 
   const waitedStatus = run(
     "node",
@@ -952,6 +956,21 @@ test("task --background enqueues a detached worker and exposes per-job status", 
   const waitedPayload = JSON.parse(waitedStatus.stdout);
   assert.equal(waitedPayload.job.id, launchPayload.jobId);
   assert.equal(waitedPayload.job.status, "completed");
+
+  const waitedUntilDone = run(
+    "node",
+    [SCRIPT, "status", launchPayload.jobId, "--wait", "--timeout-ms", "0", "--json"],
+    {
+      cwd: repo,
+      env: buildEnv(binDir)
+    }
+  );
+
+  assert.equal(waitedUntilDone.status, 0, waitedUntilDone.stderr);
+  const untilDonePayload = JSON.parse(waitedUntilDone.stdout);
+  assert.equal(untilDonePayload.job.status, "completed");
+  assert.equal(untilDonePayload.waitTimedOut, false);
+  assert.equal(untilDonePayload.timeoutMs, 21600000);
 
   const resultPayload = await waitFor(() => {
     const result = run("node", [SCRIPT, "result", launchPayload.jobId, "--json"], {
