@@ -331,6 +331,9 @@ function createTurnCaptureState(threadId, options = {}) {
     resolveCompletion = resolve;
     rejectCompletion = reject;
   });
+  // The capture can be rejected (client exit) before the caller reaches its
+  // await; keep a handled branch so that never surfaces as unhandledRejection.
+  void completion.catch(() => {});
 
   return {
     threadId,
@@ -759,6 +762,28 @@ async function captureTurn(client, threadId, startRequest, options = {}) {
   const previousHandler = client.notificationHandler;
   let lastEventAt = Date.now();
   const idleReconciler = startIdleReconciler(client, state, resolveIdleReconcileMs(options), () => lastEventAt);
+
+  // If the app-server connection dies mid-turn (broker shutdown/replacement,
+  // app-server crash), the completion promise would never settle and — with
+  // every timer unref'd — the worker's event loop would drain and the process
+  // would exit 0 silently, leaving the job "running" forever (OBS-B). Reject
+  // the capture instead so the job records a precise failure.
+  client.exitPromise.then(() => {
+    if (state.completed) {
+      return;
+    }
+    state.completed = true;
+    clearCompletionTimer(state);
+    const cause = client.exitError;
+    emitProgress(
+      state.onProgress,
+      `Codex runtime connection closed before the turn completed${cause?.message ? `: ${shorten(cause.message, 160)}` : "."}`,
+      "failed"
+    );
+    state.rejectCompletion(
+      cause ?? new Error("The Codex runtime connection closed before the turn completed (broker or app-server went away).")
+    );
+  });
 
   client.setNotificationHandler((message) => {
     lastEventAt = Date.now();
