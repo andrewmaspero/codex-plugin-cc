@@ -12,11 +12,16 @@
     "bump-version": "node scripts/bump-version.mjs",
     "check-version": "node scripts/bump-version.mjs --check",
     "prebuild": "mkdir -p plugins/codex/.generated/app-server-types && codex app-server generate-ts --out plugins/codex/.generated/app-server-types",
-    "build": "tsc -p tsconfig.app-server.json",
-    "test": "node --test --test-concurrency=6 tests/*.test.mjs"
+    "build": "tsgo -p tsconfig.app-server.json",
+    "test": "node --test --test-concurrency=6 tests/*.test.mjs",
+    "typecheck": "tsgo -p tsconfig.app-server.json",
+    "typecheck:tsc": "tsc -p tsconfig.app-server.json"
   },
   "devDependencies": {
     "@types/node": "^25.5.0",
-    "typescript": "^6.0.2"
-  }
+    "@typescript/native-preview": "7.0.0-dev.20260705.1",
+    "typescript": "^6.0.2",
+    "vitest": "^4.1.9"
+  },
+  "packageManager": "pnpm@11.5.2"
 }
