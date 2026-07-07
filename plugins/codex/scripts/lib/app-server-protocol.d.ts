@@ -31,9 +31,10 @@ import type {
   ThreadStartParams as RawThreadStartParams,
   ThreadStartResponse,
   Turn,
+  TurnEnvironmentParams,
   TurnInterruptParams,
   TurnInterruptResponse,
-  TurnStartParams,
+  TurnStartParams as RawTurnStartParams,
   TurnStartResponse,
   TurnSteerParams,
   TurnSteerResponse,
@@ -54,7 +55,6 @@ export type {
   ThreadReadParams,
   Turn,
   TurnInterruptParams,
-  TurnStartParams,
   TurnSteerParams,
   UserInput
 };
@@ -93,8 +93,18 @@ export interface ThreadItemsListResponse {
   backwardsCursor: string | null;
 }
 
-export type ThreadStartParams = Omit<RawThreadStartParams, "persistExtendedHistory">;
-export type ThreadResumeParams = Omit<RawThreadResumeParams, "persistExtendedHistory">;
+interface EnvironmentSelectionParams {
+  /**
+   * Present in upstream app-server-protocol v2 turn.rs as
+   * `TurnEnvironmentParams`; some generated TypeScript snapshots omit this
+   * field from start/resume/turn params even though app-server accepts it.
+   */
+  environments?: TurnEnvironmentParams[] | null;
+}
+
+export type ThreadStartParams = Omit<RawThreadStartParams, "persistExtendedHistory"> & EnvironmentSelectionParams;
+export type ThreadResumeParams = Omit<RawThreadResumeParams, "persistExtendedHistory"> & EnvironmentSelectionParams;
+export type TurnStartParams = RawTurnStartParams & EnvironmentSelectionParams;
 
 export interface CodexAppServerClientOptions {
   env?: NodeJS.ProcessEnv;
