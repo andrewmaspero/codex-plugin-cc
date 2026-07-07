@@ -316,6 +316,7 @@ rl.on("line", (line) => {
         }
         state.lastThreadStart = {
           cwd: message.params.cwd || null,
+          environments: message.params.environments || null,
           sandbox: message.params.sandbox || null,
           ephemeral: message.params.ephemeral ?? null,
           params: message.params
@@ -480,6 +481,7 @@ rl.on("line", (line) => {
           effort: message.params.effort ?? null,
           prompt,
           cwd: message.params.cwd ?? null,
+          environments: message.params.environments ?? null,
           sandboxPolicy: message.params.sandboxPolicy ?? null,
           params: message.params
         };

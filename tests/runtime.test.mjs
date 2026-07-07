@@ -819,6 +819,32 @@ test("task --background forwards the execution cwd through thread/start and turn
   assert.deepEqual(fakeState.lastTurnStart.sandboxPolicy.writableRoots.map((root) => fs.realpathSync(root)), [realRepo]);
 });
 
+test("task forwards a local environment selection with the execution cwd", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  const statePath = path.join(binDir, "fake-codex-state.json");
+  installFakeCodex(binDir);
+  initGitRepo(repo);
+  fs.writeFileSync(path.join(repo, "README.md"), "hello\n");
+  run("git", ["add", "README.md"], { cwd: repo });
+  run("git", ["commit", "-m", "init"], { cwd: repo });
+
+  const result = run("node", [SCRIPT, "task", "--json", "inspect the runtime selection"], {
+    cwd: repo,
+    env: buildEnv(binDir)
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  const fakeState = JSON.parse(fs.readFileSync(statePath, "utf8"));
+  const realRepo = fs.realpathSync(repo);
+  assert.deepEqual(fakeState.lastThreadStart.environments, [
+    { environmentId: "local", cwd: realRepo }
+  ]);
+  assert.deepEqual(fakeState.lastTurnStart.environments, [
+    { environmentId: "local", cwd: realRepo }
+  ]);
+});
+
 test("task logs reasoning summaries and assistant messages to the job log", () => {
   const repo = makeTempDir();
   const binDir = makeTempDir();

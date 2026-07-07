@@ -172,6 +172,7 @@ function cleanCodexStderr(stderr) {
 function buildThreadParams(cwd, options: ThreadOptions = {}): ThreadStartParams {
   return {
     cwd,
+    environments: [{ environmentId: "local", cwd }],
     model: options.model ?? null,
     approvalPolicy: options.approvalPolicy ?? "never",
     sandbox: options.sandbox ?? "read-only",
@@ -184,6 +185,7 @@ function buildResumeParams(threadId, cwd, options: ThreadOptions = {}): ThreadRe
   return {
     threadId,
     cwd,
+    environments: [{ environmentId: "local", cwd }],
     model: options.model ?? null,
     approvalPolicy: options.approvalPolicy ?? "never",
     sandbox: options.sandbox ?? "read-only"
@@ -1726,6 +1728,7 @@ export async function runAppServerTurn(cwd, options: RunAppServerTurnOptions = {
           // the per-turn override is honored unconditionally, so send it on
           // every turn to make the job's sandbox deterministic.
           cwd,
+          environments: [{ environmentId: "local", cwd }],
           approvalPolicy: "never",
           sandboxPolicy: buildTurnSandboxPolicy(options.sandbox, cwd),
           outputSchema: options.outputSchema ?? null
