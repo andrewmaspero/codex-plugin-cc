@@ -784,6 +784,41 @@ test("task forwards model selection and reasoning effort to app-server turn/star
   assert.equal(fakeState.lastTurnStart.effort, "low");
 });
 
+test("task --background forwards the execution cwd through thread/start and turn/start sandbox policy", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  const statePath = path.join(binDir, "fake-codex-state.json");
+  installFakeCodex(binDir);
+  initGitRepo(repo);
+  fs.writeFileSync(path.join(repo, "README.md"), "hello\n");
+  run("git", ["add", "README.md"], { cwd: repo });
+  run("git", ["commit", "-m", "init"], { cwd: repo });
+
+  const launched = run("node", [SCRIPT, "task", "--background", "--json", "--write", "diagnose the failing test"], {
+    cwd: repo,
+    env: buildEnv(binDir)
+  });
+
+  assert.equal(launched.status, 0, launched.stderr);
+  const launchPayload = JSON.parse(launched.stdout);
+  const waitedStatus = run(
+    "node",
+    [SCRIPT, "status", launchPayload.jobId, "--wait", "--timeout-ms", "15000", "--json"],
+    {
+      cwd: repo,
+      env: buildEnv(binDir)
+    }
+  );
+
+  assert.equal(waitedStatus.status, 0, waitedStatus.stderr);
+  const fakeState = JSON.parse(fs.readFileSync(statePath, "utf8"));
+  const realRepo = fs.realpathSync(repo);
+  assert.equal(fs.realpathSync(fakeState.lastThreadStart.cwd), realRepo);
+  assert.equal(fs.realpathSync(fakeState.lastTurnStart.cwd), realRepo);
+  assert.equal(fakeState.lastTurnStart.sandboxPolicy.type, "workspaceWrite");
+  assert.deepEqual(fakeState.lastTurnStart.sandboxPolicy.writableRoots.map((root) => fs.realpathSync(root)), [realRepo]);
+});
+
 test("task logs reasoning summaries and assistant messages to the job log", () => {
   const repo = makeTempDir();
   const binDir = makeTempDir();

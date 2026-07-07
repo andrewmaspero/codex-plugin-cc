@@ -198,14 +198,14 @@ function buildTurnInput(prompt): UserInput[] {
 // Auxiliary fields mirror the CLI's own SandboxPolicy::new_*_policy defaults
 // (codex-rs/protocol/src/protocol.rs) so a turn override behaves identically to
 // the same mode requested at thread start.
-function buildTurnSandboxPolicy(sandbox): TurnStartParams["sandboxPolicy"] {
+function buildTurnSandboxPolicy(sandbox, cwd = null): TurnStartParams["sandboxPolicy"] {
   switch (sandbox) {
     case "danger-full-access":
       return { type: "dangerFullAccess" };
     case "workspace-write":
       return {
         type: "workspaceWrite",
-        writableRoots: [],
+        writableRoots: cwd ? [cwd] : [],
         networkAccess: false,
         excludeTmpdirEnvVar: false,
         excludeSlashTmp: false
@@ -1725,8 +1725,9 @@ export async function runAppServerTurn(cwd, options: RunAppServerTurnOptions = {
           // thread is already loaded in the app-server (it only logs a warning);
           // the per-turn override is honored unconditionally, so send it on
           // every turn to make the job's sandbox deterministic.
+          cwd,
           approvalPolicy: "never",
-          sandboxPolicy: buildTurnSandboxPolicy(options.sandbox),
+          sandboxPolicy: buildTurnSandboxPolicy(options.sandbox, cwd),
           outputSchema: options.outputSchema ?? null
         }),
       { onProgress: options.onProgress }

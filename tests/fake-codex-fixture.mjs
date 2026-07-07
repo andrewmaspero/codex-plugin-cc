@@ -317,7 +317,8 @@ rl.on("line", (line) => {
         state.lastThreadStart = {
           cwd: message.params.cwd || null,
           sandbox: message.params.sandbox || null,
-          ephemeral: message.params.ephemeral ?? null
+          ephemeral: message.params.ephemeral ?? null,
+          params: message.params
         };
         const thread = nextThread(state, message.params.cwd, message.params.ephemeral);
         send({ id: message.id, result: { thread: buildThread(thread), model: message.params.model || "gpt-5.4", modelProvider: "openai", serviceTier: null, cwd: thread.cwd, approvalPolicy: "never", sandbox: { type: "readOnly", access: { type: "fullAccess" }, networkAccess: false }, reasoningEffort: null } });
@@ -472,13 +473,16 @@ rl.on("line", (line) => {
           .join("\\n");
         const turnId = nextTurnId(state);
         thread.updatedAt = now();
-	        state.lastTurnStart = {
-	          threadId: message.params.threadId,
-	          turnId,
-	          model: message.params.model ?? null,
-	          effort: message.params.effort ?? null,
-	          prompt
-	        };
+        state.lastTurnStart = {
+          threadId: message.params.threadId,
+          turnId,
+          model: message.params.model ?? null,
+          effort: message.params.effort ?? null,
+          prompt,
+          cwd: message.params.cwd ?? null,
+          sandboxPolicy: message.params.sandboxPolicy ?? null,
+          params: message.params
+        };
 	        saveState(state);
 	        send({ id: message.id, result: { turn: buildTurn(turnId) } });
 

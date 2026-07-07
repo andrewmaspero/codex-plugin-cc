@@ -944,7 +944,7 @@ async function executeTaskRun(request) {
 
   let result;
   try {
-    result = await runAppServerTurn(workspaceRoot, {
+    result = await runAppServerTurn(request.cwd, {
       resumeThreadId,
       prompt: request.prompt,
       defaultPrompt: resumeThreadId ? DEFAULT_CONTINUE_PROMPT : "",
@@ -961,7 +961,7 @@ async function executeTaskRun(request) {
     if (request.worktree?.worktreePath) {
       // The worktree job registered a broker keyed to the worktree; reap it
       // so no broker/app-server outlives the job.
-      await teardownWorkspaceBrokerSession(workspaceRoot).catch(() => {});
+      await teardownWorkspaceBrokerSession(request.cwd).catch(() => {});
       onRuntimeEndpoint?.(null, "closed");
     }
   }
