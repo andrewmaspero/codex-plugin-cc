@@ -15,6 +15,7 @@ import { fileURLToPath } from "node:url";
 
 import { buildEnv, installFakeCodex } from "./fake-codex-fixture.mjs";
 import { initGitRepo, makeTempDir, run } from "./helpers.mjs";
+import { CodexAppServerClient } from "../plugins/codex/scripts/lib/app-server.mts";
 import { resolveStateDir, upsertJob, writeJobFile } from "../plugins/codex/scripts/lib/state.mts";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -257,5 +258,46 @@ test("spawned app-server is configured with the turn-complete notify hook", asyn
     assert.match(notifyArg, /turn-complete-hook\.mts/, "notify override does not point at the plugin hook script");
   } finally {
     endSession(repo, env);
+  }
+});
+
+test("spawned app-server overlays env overrides on the ambient process env", async () => {
+  const repo = makeRepo();
+  const binDir = makeTempDir();
+  const codexHome = makeTempDir("codex-home-");
+  installFakeCodex(binDir);
+
+  const previousCodexHome = process.env.CODEX_HOME;
+  const previousTrustedClientHashes = process.env.NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S;
+  process.env.CODEX_HOME = codexHome;
+  process.env.NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S = "test-browser-client-sha";
+
+  const sep = process.platform === "win32" ? ";" : ":";
+  const env = {
+    PATH: `${binDir}${sep}${process.env.PATH}`
+  };
+  let client = null;
+
+  try {
+    client = await CodexAppServerClient.connect(repo, { disableBroker: true, env });
+
+    const fakeState = JSON.parse(fs.readFileSync(path.join(binDir, "fake-codex-state.json"), "utf8"));
+    assert.equal(fakeState.lastAppServerEnv.CODEX_HOME, codexHome);
+    assert.equal(fakeState.lastAppServerEnv.HOME, process.env.HOME);
+    assert.equal(fakeState.lastAppServerEnv.NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S, "test-browser-client-sha");
+    assert.match(fakeState.lastAppServerEnv.PATH, new RegExp(`^${binDir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+  } finally {
+    await client?.close();
+    if (previousCodexHome === undefined) {
+      delete process.env.CODEX_HOME;
+    } else {
+      process.env.CODEX_HOME = previousCodexHome;
+    }
+    if (previousTrustedClientHashes === undefined) {
+      delete process.env.NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S;
+    } else {
+      process.env.NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S = previousTrustedClientHashes;
+    }
+    endSession(repo, { ...buildEnv(binDir), CODEX_HOME: codexHome });
   }
 });

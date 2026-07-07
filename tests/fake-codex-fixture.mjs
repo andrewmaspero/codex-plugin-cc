@@ -274,6 +274,13 @@ if (args[0] !== "app-server") {
 const bootState = loadState();
 bootState.appServerStarts = (bootState.appServerStarts || 0) + 1;
 bootState.lastAppServerArgs = args.slice(1);
+bootState.lastAppServerEnv = {
+  CODEX_HOME: process.env.CODEX_HOME || null,
+  HOME: process.env.HOME || null,
+  PATH: process.env.PATH || null,
+  NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S: process.env.NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S || null,
+  CODEX_COMPANION_APP_SERVER_ENDPOINT: process.env.CODEX_COMPANION_APP_SERVER_ENDPOINT || null
+};
 saveState(bootState);
 
 const rl = readline.createInterface({ input: process.stdin });

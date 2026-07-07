@@ -7,6 +7,7 @@ import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { createBrokerEndpoint, parseBrokerEndpoint } from "./broker-endpoint.mts";
+import { buildChildEnv } from "./env.mts";
 import { resolveStateDir } from "./state.mts";
 import type { TerminateProcessTreeOptions } from "./process.mts";
 
@@ -113,7 +114,7 @@ export function spawnBrokerProcess({
   const logFd = fs.openSync(logFile, "a");
   const child = spawn(process.execPath, [scriptPath, "serve", "--endpoint", endpoint, "--cwd", cwd, "--pid-file", pidFile], {
     cwd,
-    env,
+    env: buildChildEnv(env),
     detached: true,
     stdio: ["ignore", logFd, logFd]
   });

@@ -17,6 +17,7 @@ import type {
 } from "./app-server-protocol.d.ts";
 import { parseBrokerEndpoint } from "./broker-endpoint.mts";
 import { ensureBrokerSession, loadBrokerSession } from "./broker-lifecycle.mts";
+import { buildChildEnv } from "./env.mts";
 import { terminateProcessTree } from "./process.mts";
 
 type ProtocolError = Error & { data?: unknown; rpcCode?: number };
@@ -233,7 +234,7 @@ class SpawnedCodexAppServerClient extends AppServerClientBase {
   constructor(cwd: string, options: AppServerClientInternalOptions = {}) {
     super(cwd, options);
     this.transport = "direct";
-    const env = options.env ?? process.env;
+    const env = buildChildEnv(options.env);
     this.turnCompleteHookEnabled = !options.disableTurnCompleteHook && !env?.[DISABLE_TURN_HOOK_ENV];
   }
 
@@ -241,7 +242,7 @@ class SpawnedCodexAppServerClient extends AppServerClientBase {
     const args = ["app-server", ...(this.turnCompleteHookEnabled ? buildTurnCompleteNotifyArgs() : [])];
     this.proc = spawn("codex", args, {
       cwd: this.cwd,
-      env: this.options.env ?? process.env,
+      env: buildChildEnv(this.options.env),
       stdio: ["pipe", "pipe", "pipe"],
       shell: process.platform === "win32" ? (process.env.SHELL || true) : false,
       windowsHide: true
