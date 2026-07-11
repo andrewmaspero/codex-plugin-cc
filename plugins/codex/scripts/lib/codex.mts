@@ -887,14 +887,22 @@ async function captureTurn(
     state.completed = true;
     clearCompletionTimer(state);
     const cause = client.exitError;
+    const diagnostics = client.runtimeDiagnosticTail?.(20) ?? "";
+    const diagnosticSuffix = diagnostics ? `\nBroker/app-server stderr tail:\n${diagnostics}` : "";
+    const message = `The Codex runtime connection closed before the turn completed (broker or app-server went away).${
+      cause?.message ? ` Cause: ${cause.message}` : ""
+    }${diagnosticSuffix}`;
+    const script = process.argv[1] ?? "scripts/codex-companion.mts";
+    const salvageCommand = `node ${JSON.stringify(script)} continue ${threadId} --prompt-stdin --background`;
+    const connectionError = new Error(message) as Error & { recoveryText: string; threadId: string };
+    connectionError.threadId = threadId;
+    connectionError.recoveryText = `Codex turn interrupted because the runtime connection closed before completion.\nSalvage with: ${salvageCommand}`;
     emitProgress(
       state.onProgress,
-      `Codex runtime connection closed before the turn completed${cause?.message ? `: ${shorten(cause.message, 160)}` : "."}`,
+      `${shorten(message, 500)}${diagnostics ? `\n${diagnostics}` : ""}`,
       "failed"
     );
-    state.rejectCompletion(
-      cause ?? new Error("The Codex runtime connection closed before the turn completed (broker or app-server went away).")
-    );
+    state.rejectCompletion(connectionError);
   });
 
   client.setNotificationHandler((message) => {
@@ -1336,22 +1344,33 @@ async function getCodexAuthStatusFromClient(client, cwd) {
 }
 
 export function getCodexAvailability(cwd) {
+  const installHint = "Install with `npm i -g @openai/codex` or `pnpm add -g @openai/codex`.";
+  const describeFailure = (status) =>
+    status.resolvedPath
+      ? `codex resolved to ${status.resolvedPath} but failed to run: ${status.detail}`
+      : `codex was ${status.detail}`;
   const versionStatus = binaryAvailable("codex", ["--version"], { cwd });
   if (!versionStatus.available) {
-    return versionStatus;
+    return {
+      available: false,
+      detail: `${describeFailure(versionStatus)}. ${installHint}`,
+      resolvedPath: versionStatus.resolvedPath
+    };
   }
 
   const appServerStatus = binaryAvailable("codex", ["app-server", "--help"], { cwd });
   if (!appServerStatus.available) {
     return {
       available: false,
-      detail: `${versionStatus.detail}; advanced runtime unavailable: ${appServerStatus.detail}`
+      detail: `${versionStatus.detail}; advanced runtime unavailable: ${describeFailure(appServerStatus)}. ${installHint}`,
+      resolvedPath: appServerStatus.resolvedPath
     };
   }
 
   return {
     available: true,
-    detail: `${versionStatus.detail}; advanced runtime available`
+    detail: `${versionStatus.detail}; advanced runtime available`,
+    resolvedPath: versionStatus.resolvedPath
   };
 }
 

@@ -114,6 +114,20 @@ function handleSessionStart(input) {
 
 async function handleSessionEnd(input) {
   const cwd = input.cwd || process.cwd();
+  await cleanupSessionJobs(cwd, input.session_id || process.env[SESSION_ID_ENV]);
+
+  // The broker is workspace-scoped, not Claude-session-scoped. Ending one
+  // session must not tear it out from under another session's live worker.
+  // Once this session's own jobs are removed, retain the shared runtime while
+  // any remaining workspace job is active.
+  const workspaceRoot = resolveWorkspaceRoot(cwd);
+  const hasOtherActiveJobs = loadState(workspaceRoot).jobs.some(
+    (job) => job.status === "queued" || job.status === "running"
+  );
+  if (hasOtherActiveJobs) {
+    return;
+  }
+
   const brokerSession =
     loadBrokerSession(cwd) ??
     (process.env[BROKER_ENDPOINT_ENV]
@@ -135,7 +149,6 @@ async function handleSessionEnd(input) {
     await sendBrokerShutdown(brokerEndpoint);
   }
 
-  await cleanupSessionJobs(cwd, input.session_id || process.env[SESSION_ID_ENV]);
   teardownBrokerSession({
     endpoint: brokerEndpoint,
     pidFile,

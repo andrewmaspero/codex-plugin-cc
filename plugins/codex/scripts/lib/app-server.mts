@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import net from "node:net";
+import path from "node:path";
 import process from "node:process";
 import { spawn } from "node:child_process";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
@@ -225,6 +226,11 @@ class AppServerClientBase {
     this.resolveExit(undefined);
   }
 
+  runtimeDiagnosticTail(maxLines = 20) {
+    const lines = this.stderr.trim().split(/\r?\n/).filter(Boolean);
+    return lines.slice(-maxLines).join("\n");
+  }
+
   sendMessage(_message) {
     throw new Error("sendMessage must be implemented by subclasses.");
   }
@@ -381,6 +387,20 @@ class BrokerCodexAppServerClient extends AppServerClientBase {
       this.socket.end();
     }
     await this.exitPromise;
+  }
+
+  runtimeDiagnosticTail(maxLines = 20) {
+    const target = this.endpoint ? parseBrokerEndpoint(this.endpoint) : null;
+    const logFile = target?.kind === "unix" ? path.join(path.dirname(target.path), "broker.log") : null;
+    if (!logFile || !fs.existsSync(logFile)) {
+      return super.runtimeDiagnosticTail(maxLines);
+    }
+    try {
+      const lines = fs.readFileSync(logFile, "utf8").trim().split(/\r?\n/).filter(Boolean);
+      return lines.slice(-maxLines).join("\n");
+    } catch {
+      return super.runtimeDiagnosticTail(maxLines);
+    }
   }
 
   sendMessage(message) {

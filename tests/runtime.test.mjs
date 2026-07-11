@@ -44,6 +44,26 @@ test("setup reports ready when fake codex is installed and authenticated", () =>
   assert.equal(payload.sessionRuntime.mode, "direct");
 });
 
+test("task availability errors expose a failing shim path, first stderr line, and both install commands", () => {
+  const binDir = makeTempDir();
+  const codexPath = path.join(binDir, "codex");
+  fs.writeFileSync(codexPath, "#!/bin/sh\necho 'shim target is missing' >&2\necho 'second line is noise' >&2\nexit 1\n", {
+    mode: 0o755
+  });
+
+  const result = run(process.execPath, [SCRIPT, "task", "--background", "test availability"], {
+    cwd: ROOT,
+    env: { ...testBaseEnv(), PATH: `${binDir}:${process.env.PATH}` }
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, new RegExp(codexPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.match(result.stderr, /shim target is missing/);
+  assert.doesNotMatch(result.stderr, /second line is noise/);
+  assert.match(result.stderr, /npm i -g @openai\/codex/);
+  assert.match(result.stderr, /pnpm add -g @openai\/codex/);
+});
+
 test("setup is ready without npm when Codex is already installed and authenticated", () => {
   const binDir = makeTempDir();
   installFakeCodex(binDir);

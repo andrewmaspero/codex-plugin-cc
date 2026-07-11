@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { spawnSync } from "node:child_process";
+import { afterAll } from "vitest";
 
 const createdTempDirs = [];
 let leakCleanupRegistered = false;
@@ -25,11 +26,34 @@ function registerLeakedProcessCleanup() {
   }
   leakCleanupRegistered = true;
   process.on("exit", () => {
-    for (const dir of createdTempDirs) {
-      spawnSync("pkill", ["-f", dir], { encoding: "utf8" });
-    }
+    cleanupTestProcesses();
   });
 }
+
+export function cleanupTestProcesses() {
+  if (process.platform === "win32") {
+    return;
+  }
+  const table = spawnSync("ps", ["ax", "-o", "pid=,command="], { encoding: "utf8" });
+  const pids = String(table.stdout ?? "")
+    .split(/\r?\n/)
+    .filter((line) => createdTempDirs.some((dir) => line.includes(dir)))
+    .map((line) => Number(/^\s*(\d+)/.exec(line)?.[1]))
+    .filter((pid) => Number.isFinite(pid) && pid > 0 && pid !== process.pid);
+  for (const signal of ["SIGTERM", "SIGKILL"]) {
+    for (const pid of pids) {
+      try {
+        process.kill(pid, signal);
+      } catch {
+        // Already exited between the process-table snapshot and the signal.
+      }
+    }
+  }
+}
+
+afterAll(() => {
+  cleanupTestProcesses();
+});
 
 // A test run started from inside a Claude Code session inherits
 // CLAUDE_PLUGIN_DATA (redirects companion state out of the fixture tmp dirs)

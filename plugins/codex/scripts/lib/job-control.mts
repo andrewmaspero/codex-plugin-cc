@@ -187,12 +187,12 @@ export function enrichJob(job: JobRecord, options: EnrichJobOptions = {}) {
     ...job,
     kindLabel: getJobTypeLabel(job),
     progressPreview:
-      job.status === "queued" || job.status === "running" || job.status === "failed"
+      job.status === "queued" || job.status === "running" || job.status === "failed" || job.status === "interrupted"
         ? readJobProgressPreview(job.logFile, maxProgressLines)
         : [],
     elapsed: formatElapsedDuration(job.startedAt ?? job.createdAt, job.completedAt ?? null),
     duration:
-      job.status === "completed" || job.status === "failed" || job.status === "cancelled"
+      job.status === "completed" || job.status === "failed" || job.status === "interrupted" || job.status === "cancelled"
         ? formatElapsedDuration(job.startedAt ?? job.createdAt, job.completedAt ?? job.updatedAt)
         : null
   };
@@ -367,7 +367,7 @@ export function resolveResultJob(cwd, reference) {
       if (job.status === "queued" || job.status === "running") {
         throw new Error(`Job ${job.id} is still ${job.status}. Check /codex:status and try again once it finishes.`);
       }
-      if (job.status === "completed" || job.status === "failed" || job.status === "cancelled") {
+      if (job.status === "completed" || job.status === "failed" || job.status === "interrupted" || job.status === "cancelled") {
         return {
           workspaceRoot: job.workspaceRoot ?? workspaceRoot,
           job,
@@ -385,7 +385,7 @@ export function resolveResultJob(cwd, reference) {
     selected = matchJobReference(
       jobs,
       reference,
-      (job) => job.status === "completed" || job.status === "failed" || job.status === "cancelled"
+      (job) => job.status === "completed" || job.status === "failed" || job.status === "interrupted" || job.status === "cancelled"
     );
   } catch (error) {
     // A referenced job may exist but still be active; report that instead of

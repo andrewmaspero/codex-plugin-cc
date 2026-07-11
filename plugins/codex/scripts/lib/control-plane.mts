@@ -985,6 +985,13 @@ export async function reconcileCompletedTurnJobs(cwd, jobs: JobRecord[], options
       if (!outcome || !TERMINAL_TURN_STATUSES.has(status)) {
         continue;
       }
+      // `interrupted` (and occasionally `failed`) is transient while a live
+      // worker is surviving compaction/reconnect. Only `completed` is strong
+      // enough to reconcile an alive-but-event-starved worker; otherwise the
+      // worker process must be confirmed dead before read-side finalization.
+      if (status !== "completed" && isProcessAlive(job.pid) !== false) {
+        continue;
+      }
       // Only reconcile when the terminal turn belongs to this job's run: it
       // must have started at or after the job did (a resumed thread's stale
       // last turn must not complete a job whose own turn never started).
@@ -1030,14 +1037,17 @@ export function buildJobAlerts(job: JobRecord, options: BuildJobAlertsOptions = 
       ? fs.readFileSync(job.logFile, "utf8").split(/\r?\n/).filter(Boolean)
       : [];
 
-  if (job.status === "failed") {
+  if (job.status === "failed" || job.status === "interrupted") {
     const completedAt = Date.parse(job.completedAt ?? job.updatedAt ?? "");
     if (!Number.isFinite(completedAt) || now - completedAt <= FAILED_ALERT_WINDOW_MS) {
       alerts.push({
         jobId: job.id,
-        kind: "failed",
-        evidence: shorten(job.errorMessage ?? "Job reported failure.", 160),
-        suggestedAction: `Read /codex:result ${job.id}, then relaunch with a corrected brief.`
+        kind: job.status,
+        evidence: shorten(job.errorMessage ?? (job.status === "interrupted" ? "Job runtime was interrupted." : "Job reported failure."), 160),
+        suggestedAction:
+          job.status === "interrupted"
+            ? `Read /codex:result ${job.id} for the exact continue command.`
+            : `Read /codex:result ${job.id}, then relaunch with a corrected brief.`
       });
     }
     return alerts;
@@ -1172,7 +1182,7 @@ export async function buildAlertsSnapshot(cwd, reference = "", options: BuildAle
 
   const scoped = reference
     ? jobs.filter((job) => job.id === reference || job.id.startsWith(reference))
-    : jobs.filter((job) => job.status === "queued" || job.status === "running" || job.status === "failed");
+    : jobs.filter((job) => job.status === "queued" || job.status === "running" || job.status === "failed" || job.status === "interrupted");
 
   if (reference && scoped.length === 0) {
     throw new Error(`No job found for "${reference}".`);

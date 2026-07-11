@@ -17,6 +17,7 @@ import { buildEnv, installFakeCodex } from "./fake-codex-fixture.mjs";
 import { initGitRepo, makeTempDir, run } from "./helpers.mjs";
 import { CodexAppServerClient } from "../plugins/codex/scripts/lib/app-server.mts";
 import { resolveStateDir, upsertJob, writeJobFile } from "../plugins/codex/scripts/lib/state.mts";
+import { runTrackedJob } from "../plugins/codex/scripts/lib/tracked-jobs.mts";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PLUGIN_ROOT = path.join(ROOT, "plugins", "codex");
@@ -162,6 +163,69 @@ test("status and alerts finalize a hung job whose turn already completed (comple
     killPid(workerPid);
     endSession(repo, env);
   }
+});
+
+test("read-side reconciliation never fails an interrupted turn while its worker is alive", async () => {
+  const repo = makeRepo();
+  const binDir = makeTempDir();
+  installFakeCodex(binDir, "interrupted-no-events");
+  const env = cleanEnv(binDir);
+  env.CODEX_COMPANION_IDLE_RECONCILE_MS = "0";
+  env.CODEX_COMPANION_RECONCILE_QUIET_MS = "400";
+
+  let workerPid = null;
+  try {
+    const launch = run("node", [SCRIPT, "task", "--background", "--json", "live interrupted turn"], { cwd: repo, env });
+    assert.equal(launch.status, 0, launch.stderr);
+    const jobId = JSON.parse(launch.stdout).jobId;
+    const running = await waitFor(() => {
+      const job = readJobs(repo).find((candidate) => candidate.id === jobId);
+      return job?.status === "running" && job.threadId ? job : null;
+    });
+    workerPid = running.pid;
+    await new Promise((resolve) => setTimeout(resolve, 800));
+
+    const status = run("node", [SCRIPT, "status", jobId, "--json"], { cwd: repo, env });
+    assert.equal(status.status, 0, status.stderr);
+    const after = readJobs(repo).find((candidate) => candidate.id === jobId);
+    assert.equal(after.status, "running", `live interrupted worker was falsely finalized: ${JSON.stringify(after)}`);
+    assert.equal(after.pid, workerPid);
+  } finally {
+    killPid(workerPid);
+    endSession(repo, env);
+  }
+});
+
+test("a real worker completion clears stale read-reconciler failure metadata", async () => {
+  const repo = makeRepo();
+  const job = {
+    id: "task-reconciler-self-heal",
+    title: "Codex Task",
+    workspaceRoot: repo,
+    status: "failed",
+    phase: "failed",
+    reconciledBy: "read-reconciler",
+    errorMessage: "transient interrupted turn",
+    threadId: "thr_self_heal"
+  };
+  writeJobFile(repo, job.id, job);
+  upsertJob(repo, job);
+
+  await runTrackedJob(job, async () => ({
+    exitStatus: 0,
+    threadId: "thr_self_heal",
+    turnId: "turn_self_heal",
+    payload: { status: 0, rawOutput: "Actually completed." },
+    rendered: "Actually completed."
+  }));
+
+  const stored = JSON.parse(fs.readFileSync(path.join(resolveStateDir(repo), "jobs", `${job.id}.json`), "utf8"));
+  const stateJob = readJobs(repo).find((candidate) => candidate.id === job.id);
+  assert.equal(stored.status, "completed");
+  assert.equal(stored.errorMessage, null);
+  assert.equal(stored.reconciledBy, null);
+  assert.equal(stateJob.errorMessage, null);
+  assert.equal(stateJob.reconciledBy, null);
 });
 
 test("turn-complete hook finalizes a job the worker never closed, but leaves streaming jobs alone", async () => {

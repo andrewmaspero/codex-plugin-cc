@@ -77,6 +77,7 @@ test("worker records a terminal failure when the broker dies mid-turn", async ()
     // concurrent session's SessionEnd or a broker replacement does.
     const broker = loadBrokerSession(repo);
     assert.ok(broker?.pid, "no shared broker session recorded");
+    fs.appendFileSync(broker.logFile, "broker diagnostic sentinel\n", "utf8");
     process.kill(broker.pid, "SIGKILL");
 
     const done = await waitFor(() => {
@@ -84,7 +85,7 @@ test("worker records a terminal failure when the broker dies mid-turn", async ()
       return job && job.status !== "running" && job.status !== "queued" ? job : null;
     });
 
-    assert.equal(done.status, "failed", `job should fail loudly, got: ${JSON.stringify(done)}`);
+    assert.equal(done.status, "interrupted", `job should be recoverably interrupted, got: ${JSON.stringify(done)}`);
     assert.match(
       String(done.errorMessage ?? ""),
       /connection closed|exited unexpectedly|closed before the turn completed/i,
@@ -96,12 +97,95 @@ test("worker records a terminal failure when the broker dies mid-turn", async ()
       /connection closed|exited unexpectedly|closed before the turn completed/i,
       "job log should record the connection loss"
     );
+    assert.match(log, /broker diagnostic sentinel/, "job log should capture the broker stderr tail");
+    const stored = JSON.parse(fs.readFileSync(path.join(resolveStateDir(repo), "jobs", `${jobId}.json`), "utf8"));
+    assert.match(String(stored.result?.rawOutput ?? ""), /interrupted/i);
+    assert.match(String(stored.result?.rawOutput ?? ""), new RegExp(`continue ${stored.threadId} --prompt-stdin`));
     assert.ok(running.pid, "running job had no pid");
   } finally {
     run("node", [SESSION_HOOK, "SessionEnd"], {
       cwd: repo,
       env,
       input: JSON.stringify({ hook_event_name: "SessionEnd", cwd: repo })
+    });
+  }
+});
+
+test("broker propagates an app-server crash and its stderr tail to the job", async () => {
+  const repo = makeRepo();
+  const binDir = makeTempDir();
+  installFakeCodex(binDir, "app-server-dies-mid-turn");
+  const env = cleanEnv(binDir);
+  env.CODEX_COMPANION_IDLE_RECONCILE_MS = "0";
+
+  try {
+    const launch = run("node", [SCRIPT, "task", "--background", "--json", "crash app server"], { cwd: repo, env });
+    assert.equal(launch.status, 0, launch.stderr);
+    const jobId = JSON.parse(launch.stdout).jobId;
+    const done = await waitFor(
+      () => {
+        const job = readJobs(repo).find((candidate) => candidate.id === jobId);
+        return job && job.status !== "running" && job.status !== "queued" ? job : null;
+      },
+      { timeoutMs: 5000 }
+    );
+
+    assert.equal(done.status, "interrupted");
+    const log = fs.readFileSync(done.logFile, "utf8");
+    assert.match(log, /fake app-server crash sentinel/);
+    assert.match(log, /exit 17/);
+  } finally {
+    run("node", [SESSION_HOOK, "SessionEnd"], {
+      cwd: repo,
+      env,
+      input: JSON.stringify({ hook_event_name: "SessionEnd", cwd: repo })
+    });
+  }
+});
+
+test("ending one Claude session does not kill another session's live shared-broker job", async () => {
+  const repo = makeRepo();
+  const binDir = makeTempDir();
+  installFakeCodex(binDir, "interruptible-slow-task");
+  const env = cleanEnv(binDir);
+  env.CODEX_COMPANION_SESSION_ID = "session-a";
+  env.FAKE_CODEX_HOLD_TURNS = "1";
+
+  let workerPid = null;
+  try {
+    const launch = run("node", [SCRIPT, "task", "--background", "--json", "session A live turn"], { cwd: repo, env });
+    assert.equal(launch.status, 0, launch.stderr);
+    const jobId = JSON.parse(launch.stdout).jobId;
+    const running = await waitFor(() => {
+      const job = readJobs(repo).find((candidate) => candidate.id === jobId);
+      return job?.status === "running" && job.turnId ? job : null;
+    });
+    workerPid = running.pid;
+    const broker = loadBrokerSession(repo);
+    assert.ok(broker?.pid);
+
+    const otherSessionEnv = { ...env, CODEX_COMPANION_SESSION_ID: "session-b" };
+    const ended = run("node", [SESSION_HOOK, "SessionEnd"], {
+      cwd: repo,
+      env: otherSessionEnv,
+      input: JSON.stringify({ hook_event_name: "SessionEnd", cwd: repo, session_id: "session-b" })
+    });
+    assert.equal(ended.status, 0, ended.stderr);
+    await new Promise((resolve) => setTimeout(resolve, 250));
+
+    const after = readJobs(repo).find((candidate) => candidate.id === jobId);
+    assert.equal(after.status, "running", `session B killed session A's job: ${JSON.stringify(after)}`);
+    assert.doesNotThrow(() => process.kill(broker.pid, 0));
+  } finally {
+    if (workerPid) {
+      try {
+        process.kill(workerPid, "SIGKILL");
+      } catch {}
+    }
+    run("node", [SESSION_HOOK, "SessionEnd"], {
+      cwd: repo,
+      env,
+      input: JSON.stringify({ hook_event_name: "SessionEnd", cwd: repo, session_id: "session-a" })
     });
   }
 });

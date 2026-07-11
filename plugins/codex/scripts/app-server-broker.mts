@@ -87,6 +87,7 @@ async function main() {
   // thread so a turn that starts before the response resolves is not lost.
   let pendingStreamCapture = null;
   const sockets = new Set<net.Socket>();
+  let shuttingDown = false;
 
   function clearSocketOwnership(socket) {
     if (activeRequestSocket === socket) {
@@ -139,6 +140,7 @@ async function main() {
   }
 
   async function shutdown(server) {
+    shuttingDown = true;
     for (const socket of sockets) {
       socket.end();
     }
@@ -291,6 +293,25 @@ async function main() {
       sockets.delete(socket);
       clearSocketOwnership(socket);
     });
+  });
+
+  // A child app-server can exit after a streaming request has already
+  // returned. No request promise remains for that failure to reject, so the
+  // broker must explicitly close its client sockets; otherwise workers wait
+  // forever. Write the bounded child stderr tail first so connected workers
+  // can salvage it from broker.log when their socket closes.
+  appClient.exitPromise.then(async () => {
+    if (shuttingDown) {
+      return;
+    }
+    const diagnostics = appClient.runtimeDiagnosticTail?.(20) ?? "";
+    const cause = appClient.exitError?.message ?? "codex app-server connection closed unexpectedly.";
+    process.stderr.write(`${cause}${diagnostics && !cause.includes(diagnostics) ? `\n${diagnostics}` : ""}\n`);
+    for (const socket of sockets) {
+      socket.destroy();
+    }
+    await shutdown(server).catch(() => {});
+    process.exit(1);
   });
 
   process.on("SIGTERM", async () => {

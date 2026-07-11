@@ -12,7 +12,7 @@ const STATE_FILE_NAME = "state.json";
 const JOBS_DIR_NAME = "jobs";
 const MAX_JOBS = 50;
 
-export type JobStatus = "queued" | "running" | "completed" | "failed" | "canceled" | "cancelled";
+export type JobStatus = "queued" | "running" | "completed" | "failed" | "interrupted" | "canceled" | "cancelled";
 export type JobPhase =
   | "queued"
   | "starting"

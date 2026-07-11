@@ -512,7 +512,7 @@ function buildAdversarialReviewPrompt(context, focusText) {
 function ensureCodexAvailable(cwd) {
   const availability = getCodexAvailability(cwd);
   if (!availability.available) {
-    throw new Error("Codex CLI is not installed or is missing required runtime support. Install it with `npm install -g @openai/codex`, then rerun `/codex:setup`.");
+    throw new Error(`Codex CLI is not installed or is missing required runtime support. ${availability.detail} Then rerun \`/codex:setup\`.`);
   }
 }
 

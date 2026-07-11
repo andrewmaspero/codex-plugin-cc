@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { spawnSync } from "node:child_process";
 import type { SpawnSyncOptionsWithStringEncoding } from "node:child_process";
 import process from "node:process";
@@ -23,6 +25,7 @@ export interface RunCommandOptions {
 export interface BinaryAvailableResult {
   available: boolean;
   detail: string;
+  resolvedPath: string | null;
 }
 
 export interface ProcessProbeOptions {
@@ -68,19 +71,44 @@ export function runCommandChecked(command: string, args: string[] = [], options:
   return result;
 }
 
+export function resolveBinaryPath(command: string, env: NodeJS.ProcessEnv = process.env): string | null {
+  if (path.isAbsolute(command) || command.includes(path.sep)) {
+    return fs.existsSync(command) ? command : null;
+  }
+  const pathValue = env.PATH ?? "";
+  const extensions = process.platform === "win32" ? (env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM").split(";") : [""];
+  for (const directory of pathValue.split(path.delimiter).filter(Boolean)) {
+    for (const extension of extensions) {
+      const candidate = path.join(directory, `${command}${extension}`);
+      try {
+        fs.accessSync(candidate, fs.constants.X_OK);
+        return candidate;
+      } catch {
+        // Continue searching PATH.
+      }
+    }
+  }
+  return null;
+}
+
+function firstDiagnosticLine(result: CommandResult): string {
+  const detail = result.stderr.trim() || result.error?.message || result.stdout.trim() || `exit ${result.status}`;
+  return detail.split(/\r?\n/, 1)[0];
+}
+
 export function binaryAvailable(command: string, versionArgs: string[] = ["--version"], options: RunCommandOptions = {}): BinaryAvailableResult {
+  const resolvedPath = resolveBinaryPath(command, options.env ?? process.env);
   const result = runCommand(command, versionArgs, options);
   if (result.error && (result.error as NodeJS.ErrnoException).code === "ENOENT") {
-    return { available: false, detail: "not found" };
+    return { available: false, detail: "not found on PATH", resolvedPath: null };
   }
   if (result.error) {
-    return { available: false, detail: result.error.message };
+    return { available: false, detail: firstDiagnosticLine(result), resolvedPath };
   }
   if (result.status !== 0) {
-    const detail = result.stderr.trim() || result.stdout.trim() || `exit ${result.status}`;
-    return { available: false, detail };
+    return { available: false, detail: firstDiagnosticLine(result), resolvedPath };
   }
-  return { available: true, detail: result.stdout.trim() || result.stderr.trim() || "ok" };
+  return { available: true, detail: result.stdout.trim() || result.stderr.trim() || "ok", resolvedPath };
 }
 
 function looksLikeMissingProcessMessage(text) {

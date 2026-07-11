@@ -502,7 +502,7 @@ rl.on("line", (line) => {
         thread.turns = thread.turns || [];
         thread.turns.push({
           id: turnId,
-          status: "completed",
+          status: BEHAVIOR === "interrupted-no-events" ? "interrupted" : "completed",
           startedAt: now(),
           completedAt: now(),
           durationMs: 100,
@@ -514,7 +514,7 @@ rl.on("line", (line) => {
         });
         saveState(state);
 
-        if (BEHAVIOR === "no-turn-events") {
+        if (BEHAVIOR === "no-turn-events" || BEHAVIOR === "interrupted-no-events") {
           // Model an event stream that silently drops every notification for
           // the turn: the turn is recorded as completed in thread state (so
           // thread/turns/list sees it) but the client never receives
@@ -727,6 +727,10 @@ rl.on("line", (line) => {
 	                send({ method: "turn/completed", params: { threadId: thread.id, turn: buildTurn(turnId, "completed") } });
 	              }, 5000);
 	          interruptibleTurns.set(turnId, { threadId: thread.id, timer });
+	        } else if (BEHAVIOR === "app-server-dies-mid-turn") {
+	          send({ method: "turn/started", params: { threadId: thread.id, turn: buildTurn(turnId) } });
+	          console.error("fake app-server crash sentinel");
+	          setTimeout(() => process.exit(17), 25);
 	        } else if (BEHAVIOR === "slow-task") {
 	          emitTurnCompletedLater(thread.id, turnId, items, 400);
 	        } else {

@@ -203,7 +203,9 @@ export async function runTrackedJob(job: JobRecord, runner: () => Promise<Tracke
       completedAt,
       result: execution.payload,
       rendered: execution.rendered,
-      summary: terminalSummary
+      summary: terminalSummary,
+      errorMessage: null,
+      reconciledBy: null
     });
     upsertJob(job.workspaceRoot, {
       id: job.id,
@@ -213,7 +215,9 @@ export async function runTrackedJob(job: JobRecord, runner: () => Promise<Tracke
       summary: terminalSummary,
       phase: completionStatus === "completed" ? "done" : "failed",
       pid: null,
-      completedAt
+      completedAt,
+      errorMessage: null,
+      reconciledBy: null
     });
     writeJobVisibilityMarker(job.workspaceRoot, { ...job, ...runningRecord }, completionStatus, terminalSummary);
     appendLogBlock(options.logFile ?? job.logFile ?? null, "Final output", execution.rendered);
@@ -222,24 +226,37 @@ export async function runTrackedJob(job: JobRecord, runner: () => Promise<Tracke
     const errorMessage = error instanceof Error ? error.message : String(error);
     const existing = readStoredJobOrNull(job.workspaceRoot, job.id) ?? runningRecord;
     const completedAt = nowIso();
+    const recoverable = error && typeof error === "object" ? (error as { recoveryText?: string; threadId?: string }).recoveryText : null;
+    const terminalStatus = recoverable ? "interrupted" : "failed";
     writeJobFile(job.workspaceRoot, job.id, {
       ...existing,
-      status: "failed",
-      phase: "failed",
+      status: terminalStatus,
+      phase: terminalStatus,
       errorMessage,
       pid: null,
       completedAt,
+      ...(recoverable
+        ? {
+            result: {
+              status: 1,
+              threadId: (error as { threadId?: string }).threadId ?? existing.threadId ?? null,
+              rawOutput: recoverable,
+              interrupted: true
+            },
+            rendered: recoverable
+          }
+        : {}),
       logFile: options.logFile ?? job.logFile ?? existing.logFile ?? null
     });
     upsertJob(job.workspaceRoot, {
       id: job.id,
-      status: "failed",
-      phase: "failed",
+      status: terminalStatus,
+      phase: terminalStatus,
       pid: null,
       errorMessage,
       completedAt
     });
-    writeJobVisibilityMarker(job.workspaceRoot, { ...job, ...existing }, "failed", errorMessage);
+    writeJobVisibilityMarker(job.workspaceRoot, { ...job, ...existing }, terminalStatus, recoverable ?? errorMessage);
     throw error;
   }
 }
