@@ -33,7 +33,7 @@ Command selection:
 - If the forwarded request includes `--fresh`, strip that token from the task text and do not add `--resume-last`.
 - `--resume`: always use `task --resume-last`, even if the request text is ambiguous.
 - `--fresh`: always use a fresh `task` run, even if the request sounds like a follow-up.
-- `--effort`: accepted values are `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, `ultra` (`max` and `ultra` are GPT-5.6 tiers; `ultra` adds automatic task delegation and is not supported by `gpt-5.6-luna`).
+- `--effort`: accepted values are `none`, `minimal`, `low`, `medium`, `high`. `high` is the ceiling by policy; do not pass `xhigh`, `max`, or `ultra` even though newer models advertise them.
 - `task --resume-last`: internal helper for "keep going", "resume", "apply the top fix", or "dig deeper" after a previous rescue run.
 
 Safety rules:

@@ -176,8 +176,8 @@ Ask Codex to redesign the database connection to be more resilient.
 **Notes:**
 
 - if you do not pass `--model` or `--effort`, Codex chooses its own defaults.
-- model aliases for the GPT-5.6 family: `sol` → `gpt-5.6-sol` (frontier agentic coding; supports `ultra` effort, which adds automatic task delegation / subagent orchestration), `terra` → `gpt-5.6-terra` (balanced everyday model), `luna` → `gpt-5.6-luna` (fast and cheap; no `ultra`). Legacy: `spark` → `gpt-5.3-codex-spark`.
-- reasoning efforts go up to `max` and `ultra` on GPT-5.6 models (requires Codex CLI ≥ 0.144.0)
+- model aliases for the GPT-5.6 family: `sol` → `gpt-5.6-sol` (frontier agentic coding; orchestrates its own subagents), `terra` → `gpt-5.6-terra` (balanced everyday model), `luna` → `gpt-5.6-luna` (fast and cheap). Legacy: `spark` → `gpt-5.3-codex-spark`. The 5.6 models require Codex CLI ≥ 0.144.0.
+- accepted `--effort` values: `none`, `minimal`, `low`, `medium`, `high` — `high` is the plugin ceiling by policy
 - follow-up rescue requests can continue the latest Codex task in the repo
 
 ### `/codex:transfer`

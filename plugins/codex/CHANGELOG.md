@@ -6,9 +6,10 @@ GPT-5.6 model family support.
 
 - Added model aliases `sol` → `gpt-5.6-sol`, `terra` → `gpt-5.6-terra`, and
   `luna` → `gpt-5.6-luna` alongside the legacy `spark` alias.
-- Accepted the new GPT-5.6 reasoning efforts `max` and `ultra` in `--effort`
-  (`ultra` enables automatic task delegation; not supported by `gpt-5.6-luna`).
-  Requires Codex CLI >= 0.144.0 for the 5.6 models.
+- Capped `--effort` at `high` by policy: accepted values are now `none`,
+  `minimal`, `low`, `medium`, `high` (`xhigh` removed; the new GPT-5.6 `max`
+  and `ultra` tiers are intentionally not exposed). The 5.6 models require
+  Codex CLI >= 0.144.0.
 - Updated command/agent/skill docs and README examples from gpt-5.5-era
   models to the 5.6 family, with regression coverage for alias mapping and
   effort validation.

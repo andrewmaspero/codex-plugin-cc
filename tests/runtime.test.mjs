@@ -784,7 +784,7 @@ test("task forwards model selection and reasoning effort to app-server turn/star
   assert.equal(fakeState.lastTurnStart.effort, "low");
 });
 
-test("task maps GPT-5.6 model aliases and accepts max/ultra efforts", () => {
+test("task maps GPT-5.6 model aliases and caps reasoning effort at high", () => {
   const repo = makeTempDir();
   const binDir = makeTempDir();
   const statePath = path.join(binDir, "fake-codex-state.json");
@@ -795,8 +795,8 @@ test("task maps GPT-5.6 model aliases and accepts max/ultra efforts", () => {
   run("git", ["commit", "-m", "init"], { cwd: repo });
 
   const cases = [
-    { alias: "sol", slug: "gpt-5.6-sol", effort: "ultra" },
-    { alias: "terra", slug: "gpt-5.6-terra", effort: "max" },
+    { alias: "sol", slug: "gpt-5.6-sol", effort: "high" },
+    { alias: "terra", slug: "gpt-5.6-terra", effort: "medium" },
     { alias: "luna", slug: "gpt-5.6-luna", effort: "low" }
   ];
   for (const { alias, slug, effort } of cases) {
@@ -810,12 +810,14 @@ test("task maps GPT-5.6 model aliases and accepts max/ultra efforts", () => {
     assert.equal(fakeState.lastTurnStart.effort, effort);
   }
 
-  const rejected = run("node", [SCRIPT, "task", "--model", "sol", "--effort", "hyper", "diagnose"], {
-    cwd: repo,
-    env: buildEnv(binDir)
-  });
-  assert.notEqual(rejected.status, 0);
-  assert.match(`${rejected.stderr}${rejected.stdout}`, /Unsupported reasoning effort/i);
+  for (const effort of ["xhigh", "max", "ultra", "hyper"]) {
+    const rejected = run("node", [SCRIPT, "task", "--model", "sol", "--effort", effort, "diagnose"], {
+      cwd: repo,
+      env: buildEnv(binDir)
+    });
+    assert.notEqual(rejected.status, 0, `effort ${effort} should be rejected`);
+    assert.match(`${rejected.stderr}${rejected.stdout}`, /Unsupported reasoning effort/i);
+  }
 });
 
 test("task --background forwards the execution cwd through thread/start and turn/start sandbox policy", () => {
