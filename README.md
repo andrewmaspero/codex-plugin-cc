@@ -161,8 +161,9 @@ Examples:
 /codex:rescue investigate why the tests started failing
 /codex:rescue fix the failing test with the smallest safe patch
 /codex:rescue --resume apply the top fix from the last run
-/codex:rescue --model gpt-5.4-mini --effort medium investigate the flaky integration test
-/codex:rescue --model spark fix the issue quickly
+/codex:rescue --model sol --effort high redesign the retry pipeline across services
+/codex:rescue --model terra --effort medium investigate the flaky integration test
+/codex:rescue --model luna --effort low look up how the config loader resolves paths
 /codex:rescue --background investigate the regression
 ```
 
@@ -175,7 +176,8 @@ Ask Codex to redesign the database connection to be more resilient.
 **Notes:**
 
 - if you do not pass `--model` or `--effort`, Codex chooses its own defaults.
-- if you say `spark`, the plugin maps that to `gpt-5.3-codex-spark`
+- model aliases for the GPT-5.6 family: `sol` → `gpt-5.6-sol` (frontier agentic coding; supports `ultra` effort, which adds automatic task delegation / subagent orchestration), `terra` → `gpt-5.6-terra` (balanced everyday model), `luna` → `gpt-5.6-luna` (fast and cheap; no `ultra`). Legacy: `spark` → `gpt-5.3-codex-spark`.
+- reasoning efforts go up to `max` and `ultra` on GPT-5.6 models (requires Codex CLI ≥ 0.144.0)
 - follow-up rescue requests can continue the latest Codex task in the repo
 
 ### `/codex:transfer`
@@ -311,10 +313,10 @@ The Codex plugin wraps the [Codex app server](https://developers.openai.com/code
 
 ### Common Configurations
 
-If you want to change the default reasoning effort or the default model that gets used by the plugin, you can define that inside your user-level or project-level `config.toml`. For example to always use `gpt-5.4-mini` on `high` for a specific project you can add the following to a `.codex/config.toml` file at the root of the directory you started Claude in:
+If you want to change the default reasoning effort or the default model that gets used by the plugin, you can define that inside your user-level or project-level `config.toml`. For example to always use `gpt-5.6-terra` on `high` for a specific project you can add the following to a `.codex/config.toml` file at the root of the directory you started Claude in:
 
 ```toml
-model = "gpt-5.4-mini"
+model = "gpt-5.6-terra"
 model_reasoning_effort = "high"
 ```
 

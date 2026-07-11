@@ -784,6 +784,40 @@ test("task forwards model selection and reasoning effort to app-server turn/star
   assert.equal(fakeState.lastTurnStart.effort, "low");
 });
 
+test("task maps GPT-5.6 model aliases and accepts max/ultra efforts", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  const statePath = path.join(binDir, "fake-codex-state.json");
+  installFakeCodex(binDir);
+  initGitRepo(repo);
+  fs.writeFileSync(path.join(repo, "README.md"), "hello\n");
+  run("git", ["add", "README.md"], { cwd: repo });
+  run("git", ["commit", "-m", "init"], { cwd: repo });
+
+  const cases = [
+    { alias: "sol", slug: "gpt-5.6-sol", effort: "ultra" },
+    { alias: "terra", slug: "gpt-5.6-terra", effort: "max" },
+    { alias: "luna", slug: "gpt-5.6-luna", effort: "low" }
+  ];
+  for (const { alias, slug, effort } of cases) {
+    const result = run("node", [SCRIPT, "task", "--model", alias, "--effort", effort, "diagnose the failing test"], {
+      cwd: repo,
+      env: buildEnv(binDir)
+    });
+    assert.equal(result.status, 0, result.stderr);
+    const fakeState = JSON.parse(fs.readFileSync(statePath, "utf8"));
+    assert.equal(fakeState.lastTurnStart.model, slug);
+    assert.equal(fakeState.lastTurnStart.effort, effort);
+  }
+
+  const rejected = run("node", [SCRIPT, "task", "--model", "sol", "--effort", "hyper", "diagnose"], {
+    cwd: repo,
+    env: buildEnv(binDir)
+  });
+  assert.notEqual(rejected.status, 0);
+  assert.match(`${rejected.stderr}${rejected.stdout}`, /Unsupported reasoning effort/i);
+});
+
 test("task --background forwards the execution cwd through thread/start and turn/start sandbox policy", () => {
   const repo = makeTempDir();
   const binDir = makeTempDir();

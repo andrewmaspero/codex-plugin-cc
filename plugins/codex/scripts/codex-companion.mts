@@ -120,8 +120,13 @@ const WAIT_REAP_INTERVAL_MS = 5000;
 // Alive-but-hung workers pass pid checks, so waiters also reconcile against
 // the thread's latest turn state (bounded to one app-server query per window).
 const WAIT_TURN_RECONCILE_INTERVAL_MS = 30000;
-const VALID_REASONING_EFFORTS = new Set(["none", "minimal", "low", "medium", "high", "xhigh"]);
-const MODEL_ALIASES = new Map([["spark", "gpt-5.3-codex-spark"]]);
+const VALID_REASONING_EFFORTS = new Set(["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]);
+const MODEL_ALIASES = new Map([
+  ["spark", "gpt-5.3-codex-spark"],
+  ["sol", "gpt-5.6-sol"],
+  ["terra", "gpt-5.6-terra"],
+  ["luna", "gpt-5.6-luna"]
+]);
 const MIN_NODE_VERSION = { major: 22, minor: 18, patch: 0 };
 const MIN_NODE_VERSION_LABEL = "22.18.0";
 const SANDBOX_ALIASES = new Map([
@@ -189,7 +194,7 @@ function printUsage() {
       "  node scripts/codex-companion.mts setup [--enable-review-gate|--disable-review-gate] [--sandbox <read-only|write|full|clear>] [--statusline] [--json]",
       "  node scripts/codex-companion.mts review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>]",
       "  node scripts/codex-companion.mts adversarial-review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [focus text]",
-      "  node scripts/codex-companion.mts task [--background] [--write|--full|--sandbox <mode>] [--worktree|--worktree-name <name>] [--goal <objective>] [--goal-budget <tokens>] [--resume-last|--resume|--fresh] [--model <model|spark>] [--effort <none|minimal|low|medium|high|xhigh>] [prompt]",
+      "  node scripts/codex-companion.mts task [--background] [--write|--full|--sandbox <mode>] [--worktree|--worktree-name <name>] [--goal <objective>] [--goal-budget <tokens>] [--resume-last|--resume|--fresh] [--model <model|sol|terra|luna|spark>] [--effort <none|minimal|low|medium|high|xhigh|max|ultra>] [prompt]",
       "  node scripts/codex-companion.mts transfer [--source <claude-jsonl>] [--json]",
       "  node scripts/codex-companion.mts status [job-id] [--all] [--wait] [--timeout-ms <ms, 0 = until done>] [--poll-interval-ms <ms>] [--json]",
       "  node scripts/codex-companion.mts wait <job-id> [--timeout <seconds>]",
@@ -204,7 +209,7 @@ function printUsage() {
       "  node scripts/codex-companion.mts alerts [job-id] [--stall-seconds <n>] [--no-goals] [--json]",
       "  node scripts/codex-companion.mts goal <set|show|clear> [job-id|thread-id] [--budget <tokens>] [--status <status>] [-- <objective>]",
       "  node scripts/codex-companion.mts artifacts [job-id] [--limit <n>] [--json]",
-      "  node scripts/codex-companion.mts continue <thread-id> [--background] [--write|--full|--sandbox <mode>] [--worktree|--worktree-name <name>] [--goal <objective>] [--goal-budget <tokens>] [--model <model|spark>] [--effort <none|minimal|low|medium|high|xhigh>] [prompt]",
+      "  node scripts/codex-companion.mts continue <thread-id> [--background] [--write|--full|--sandbox <mode>] [--worktree|--worktree-name <name>] [--goal <objective>] [--goal-budget <tokens>] [--model <model|sol|terra|luna|spark>] [--effort <none|minimal|low|medium|high|xhigh|max|ultra>] [prompt]",
       "  node scripts/codex-companion.mts worktrees [--prune] [--json]"
     ].join("\n")
   );
@@ -327,7 +332,7 @@ function normalizeReasoningEffort(effort) {
   }
   if (!VALID_REASONING_EFFORTS.has(normalized)) {
     throw new Error(
-      `Unsupported reasoning effort "${effort}". Use one of: none, minimal, low, medium, high, xhigh.`
+      `Unsupported reasoning effort "${effort}". Use one of: none, minimal, low, medium, high, xhigh, max, ultra.`
     );
   }
   return normalized;

@@ -20,20 +20,20 @@ Execution rules:
 - That prompt drafting is the only Claude-side work allowed. Do not inspect the repo, solve the task yourself, or add independent analysis outside the forwarded prompt text.
 - Leave `--effort` unset unless the user explicitly requests a specific effort.
 - Leave model unset by default. Add `--model` only when the user explicitly asks for one.
-- Map `spark` to `--model gpt-5.3-codex-spark`.
+- Map model aliases: `sol` to `--model gpt-5.6-sol`, `terra` to `--model gpt-5.6-terra`, `luna` to `--model gpt-5.6-luna`, `spark` to `--model gpt-5.3-codex-spark`.
 - Sandbox: forward `--write`, `--full`, `--sandbox <mode>`, `--worktree`, and `--worktree-name <name>` when present; strip them from the task text. If the user passed no sandbox control, add NOTHING — the workspace's configured default sandbox (set with `/codex:setup --sandbox`) applies, and adding `--write` would silently downgrade a workspace configured for full access. Only add `--write` when the task clearly requires edits AND the workspace has no configured default (setup report shows `default sandbox: read-only`).
 - Forward `--goal <objective>` and `--goal-budget <tokens>` when present; strip them from the task text.
 
 Command selection:
 - Use exactly one `task` invocation per rescue handoff.
 - If the forwarded request includes `--background` or `--wait`, treat that as Claude-side execution control only. Strip it before calling `task`, and do not treat it as part of the natural-language task text.
-- If the forwarded request includes `--model`, normalize `spark` to `gpt-5.3-codex-spark` and pass it through to `task`.
+- If the forwarded request includes `--model`, normalize aliases (`sol` to `gpt-5.6-sol`, `terra` to `gpt-5.6-terra`, `luna` to `gpt-5.6-luna`, `spark` to `gpt-5.3-codex-spark`) and pass it through to `task`.
 - If the forwarded request includes `--effort`, pass it through to `task`.
 - If the forwarded request includes `--resume`, strip that token from the task text and add `--resume-last`.
 - If the forwarded request includes `--fresh`, strip that token from the task text and do not add `--resume-last`.
 - `--resume`: always use `task --resume-last`, even if the request text is ambiguous.
 - `--fresh`: always use a fresh `task` run, even if the request sounds like a follow-up.
-- `--effort`: accepted values are `none`, `minimal`, `low`, `medium`, `high`, `xhigh`.
+- `--effort`: accepted values are `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, `ultra` (`max` and `ultra` are GPT-5.6 tiers; `ultra` adds automatic task delegation and is not supported by `gpt-5.6-luna`).
 - `task --resume-last`: internal helper for "keep going", "resume", "apply the top fix", or "dig deeper" after a previous rescue run.
 
 Safety rules:
