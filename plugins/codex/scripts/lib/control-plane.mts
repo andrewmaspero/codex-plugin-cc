@@ -230,6 +230,10 @@ export async function steerJob(cwd, reference, message) {
     upsertJob(workspaceRoot, { id: job.id, lastSteerAt: new Date().toISOString() });
   }
 
+  const activeJobCount = listJobs(workspaceRoot).filter(
+    (candidate) => candidate.status === "queued" || candidate.status === "running"
+  ).length;
+
   return {
     jobId: job.id,
     jobStatus: job.status,
@@ -237,6 +241,8 @@ export async function steerJob(cwd, reference, message) {
     expectedTurnId: turnId,
     steered: result.steered,
     transport: result.transport,
+    failureKind: result.failureKind ?? null,
+    activeJobCount,
     detail: result.detail,
     softLimitExceeded: countWords(text) > STEER_SOFT_WORD_LIMIT
   };
@@ -251,9 +257,7 @@ export function renderSteerResult(payload) {
   } else {
     lines.push(`Steering job ${payload.jobId} failed: ${payload.detail}`);
     if (payload.jobStatus === "running" || payload.jobStatus === "queued") {
-      lines.push(
-        "The job is still active, so its turn is likely running on an app-server this session's broker cannot reach (this happens when several jobs share one workspace). Run parallel jobs in worktrees (--worktree) to keep each steerable, or /codex:cancel and relaunch."
-      );
+      lines.push(...describeActiveSteerFailure(payload));
     } else {
       lines.push(
         "If the turn already finished, use /codex:result and /codex:continue instead. If the correction is urgent, /codex:cancel and relaunch with a tighter brief."
@@ -264,6 +268,39 @@ export function renderSteerResult(payload) {
     lines.push(`Note: the steer message exceeded ${STEER_SOFT_WORD_LIMIT} words. Keep steering deltas short.`);
   }
   return `${lines.join("\n")}\n`;
+}
+
+/**
+ * Explain a steer failure on a still-active job by its actual cause instead of
+ * guessing "another job owns the runtime" (which is wrong for the common
+ * single-job case).
+ */
+function describeActiveSteerFailure(payload) {
+  if (payload.failureKind === "threadNotFound") {
+    return [
+      "The job's runtime answered but no longer indexes this thread under its original id, even though the turn is still running. The known trigger is an in-turn auto-compaction on a long turn: the Codex app-server re-keys the live thread internally, so turn/steer and turn/interrupt by the original thread id fail with 'thread not found' while the turn keeps streaming.",
+      `To redirect the job now: /codex:cancel ${payload.jobId}, then /codex:continue ${payload.threadId} -- <correction> (thread/resume reloads the thread from its rollout, which still works). Otherwise let the turn finish and follow it with /codex:status ${payload.jobId}.`
+    ];
+  }
+  if (payload.failureKind === "busy") {
+    return ["The shared Codex broker was momentarily busy with an in-flight request. Retry the same steer in a few seconds."];
+  }
+  if (payload.failureKind === "unreachable") {
+    const lines = [
+      "No runtime answered at the endpoint recorded for this job (dead broker socket, or the turn runs on an in-process direct transport that external commands cannot reach)."
+    ];
+    if ((payload.activeJobCount ?? 0) > 1) {
+      lines.push(
+        "Several jobs are active in this workspace; running parallel jobs in worktrees (--worktree) keeps each one steerable. Otherwise /codex:cancel and relaunch."
+      );
+    } else {
+      lines.push(`If the correction is urgent, /codex:cancel ${payload.jobId} and relaunch with a tighter brief, or wait for the turn and use /codex:continue ${payload.threadId}.`);
+    }
+    return lines;
+  }
+  return [
+    `The job is still active but the steer request failed. Check /codex:status ${payload.jobId} and /codex:tail ${payload.jobId}; if the runtime is wedged, /codex:cancel and relaunch.`
+  ];
 }
 
 // --- goals ------------------------------------------------------------------

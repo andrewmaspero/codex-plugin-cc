@@ -1052,7 +1052,11 @@ async function withSteerableAppServer<T>(
   try {
     client = await CodexAppServerClient.connect(cwd);
     if (client.transport === "broker") {
-      onEndpoint?.(process.env[BROKER_ENDPOINT_ENV] ?? loadBrokerSession(cwd)?.endpoint ?? null, "shared");
+      // Record the endpoint the client ACTUALLY connected through, not a
+      // re-derivation from env/session-file: those can diverge (e.g. when
+      // connect() replaced a stale session broker), and steer/goal/cancel
+      // target whatever gets recorded here.
+      onEndpoint?.(client.endpoint ?? process.env[BROKER_ENDPOINT_ENV] ?? loadBrokerSession(cwd)?.endpoint ?? null, "shared");
     } else {
       onEndpoint?.(null, "direct");
     }
@@ -1473,6 +1477,39 @@ export async function interruptAppServerTurn(cwd, { threadId, turnId, brokerEndp
   }
 }
 
+/**
+ * Classify a failed live-turn control request (steer/interrupt) so callers can
+ * report the actual reason instead of a generic guess.
+ *
+ * - "threadNotFound": the runtime answered but does not index the thread under
+ *   this id. For a job whose turn is demonstrably still streaming, the known
+ *   trigger is an in-turn auto-compaction (Codex app-server re-keys the live
+ *   thread internally; turn/steer + turn/interrupt by the original thread id
+ *   fail while the turn keeps running and thread/resume still works).
+ * - "unreachable": no runtime answered at all (dead broker socket, direct
+ *   in-process transport, connect timeout).
+ * - "busy": the shared broker rejected the request while streaming.
+ */
+export function classifySteerFailure(error): "busy" | "threadNotFound" | "unreachable" | "other" {
+  if (error?.rpcCode === BROKER_BUSY_RPC_CODE) {
+    return "busy";
+  }
+  const message = String(error?.message ?? error ?? "");
+  if (/thread not found/i.test(message)) {
+    return "threadNotFound";
+  }
+  if (
+    error?.code === "ENOENT" ||
+    error?.code === "ECONNREFUSED" ||
+    error?.code === "ECONNRESET" ||
+    error?.code === "EPIPE" ||
+    /Timed out waiting for the shared Codex broker/i.test(message)
+  ) {
+    return "unreachable";
+  }
+  return "other";
+}
+
 export async function steerAppServerTurn(cwd, { threadId, turnId, text, brokerEndpoint = null }) {
   if (!threadId || !turnId) {
     return {
@@ -1480,6 +1517,7 @@ export async function steerAppServerTurn(cwd, { threadId, turnId, text, brokerEn
       steered: false,
       turnId: null,
       transport: null,
+      failureKind: "other",
       detail: "missing threadId or turnId"
     };
   }
@@ -1491,6 +1529,7 @@ export async function steerAppServerTurn(cwd, { threadId, turnId, text, brokerEn
       steered: false,
       turnId: null,
       transport: null,
+      failureKind: "other",
       detail: availability.detail
     };
   }
@@ -1525,6 +1564,7 @@ export async function steerAppServerTurn(cwd, { threadId, turnId, text, brokerEn
       steered: true,
       turnId: response.turnId ?? turnId,
       transport: client.transport,
+      failureKind: null,
       detail: `Steered turn ${response.turnId ?? turnId} on ${threadId}.`
     };
   } catch (error) {
@@ -1533,6 +1573,7 @@ export async function steerAppServerTurn(cwd, { threadId, turnId, text, brokerEn
       steered: false,
       turnId: null,
       transport: client?.transport ?? null,
+      failureKind: client ? classifySteerFailure(error) : "unreachable",
       detail: error instanceof Error ? error.message : String(error)
     };
   } finally {

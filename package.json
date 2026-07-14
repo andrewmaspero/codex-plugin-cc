@@ -15,7 +15,7 @@
     "build": "tsgo -p tsconfig.app-server.json",
     "test": "pnpm run test:unit && pnpm run test:integration",
     "test:unit": "vitest run --configLoader runner tests/state.test.mjs tests/bump-version.test.mjs tests/render.test.mjs tests/git.test.mjs tests/args.test.mjs",
-    "test:integration": "vitest run --configLoader runner tests/broker-death.test.mjs tests/broker-endpoint.test.mjs tests/commands.test.mjs tests/continue-streaming.test.mjs tests/control-plane.test.mjs tests/goals.test.mjs tests/job-reaper.test.mjs tests/job-visibility.test.mjs tests/native-visibility.integration.test.mjs tests/parallel-jobs.test.mjs tests/permissions.test.mjs tests/process.test.mjs tests/runtime.test.mjs tests/strict-args-worktrees.test.mjs tests/turn-reconciliation.test.mjs",
+    "test:integration": "vitest run --configLoader runner tests/broker-death.test.mjs tests/broker-endpoint.test.mjs tests/commands.test.mjs tests/continue-streaming.test.mjs tests/control-plane.test.mjs tests/goals.test.mjs tests/job-reaper.test.mjs tests/job-visibility.test.mjs tests/native-visibility.integration.test.mjs tests/parallel-jobs.test.mjs tests/permissions.test.mjs tests/process.test.mjs tests/runtime.test.mjs tests/single-job-steer.test.mjs tests/strict-args-worktrees.test.mjs tests/turn-reconciliation.test.mjs",
     "typecheck": "tsgo -p tsconfig.app-server.json",
     "typecheck:tsc": "tsc -p tsconfig.app-server.json"
   },
