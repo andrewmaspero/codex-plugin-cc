@@ -212,6 +212,17 @@ export function readStoredJob(workspaceRoot: string, jobId: string): JobRecord |
   return typeof job.id === "string" ? (job as JobRecord) : null;
 }
 
+export async function waitForStoredJob(workspaceRoot: string, jobId: string, timeoutMs = 3000, intervalMs = 100): Promise<JobRecord | null> {
+  const deadline = Date.now() + timeoutMs;
+  while (true) {
+    const job = readStoredJob(workspaceRoot, jobId);
+    if (job || Date.now() >= deadline) {
+      return job;
+    }
+    await new Promise((resolve) => setTimeout(resolve, Math.min(intervalMs, Math.max(1, deadline - Date.now()))));
+  }
+}
+
 function matchJobReference(jobs: JobRecord[], reference: string, predicate: (job: JobRecord) => boolean = () => true) {
   const filtered = jobs.filter(predicate);
   if (!reference) {

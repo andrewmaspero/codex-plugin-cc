@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import { makeTempDir, run } from "./helpers.mjs";
 import { fileURLToPath } from "node:url";
 import { resolveJobFile, resolveJobLogFile, resolveStateDir, resolveStateFile, saveState, upsertJob, writeJobFile } from "../plugins/codex/scripts/lib/state.mts";
+import { waitForStoredJob } from "../plugins/codex/scripts/lib/job-control.mts";
 import {
   consumeVisibilityMarkers,
   renderVisibilityAdditionalContext,
@@ -15,6 +16,19 @@ import {
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const STATUSLINE = path.join(ROOT, "plugins", "codex", "scripts", "statusline.mts");
+
+test("worker lookup retries a job file that appears after startup", async () => {
+  const workspace = makeTempDir();
+  const jobId = "task-delayed-write";
+  const delayedWrite = setTimeout(() => writeJobFile(workspace, jobId, { id: jobId, request: { kind: "task" } }), 150);
+  try {
+    const job = await waitForStoredJob(workspace, jobId, 1000, 25);
+    assert.equal(job?.id, jobId);
+    assert.equal(job?.request?.kind, "task");
+  } finally {
+    clearTimeout(delayedWrite);
+  }
+});
 
 test("resolveStateDir uses a temp-backed per-workspace directory", () => {
   const workspace = makeTempDir();

@@ -804,7 +804,61 @@ test("task forwards model selection and reasoning effort to app-server turn/star
   assert.equal(fakeState.lastTurnStart.effort, "low");
 });
 
-test("task maps GPT-5.6 model aliases and caps reasoning effort at high", () => {
+test("fresh tasks and reviews default to sol, while continued threads keep their model", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  const statePath = path.join(binDir, "fake-codex-state.json");
+  installFakeCodex(binDir);
+  initGitRepo(repo);
+  fs.writeFileSync(path.join(repo, "README.md"), "hello\n");
+  run("git", ["add", "README.md"], { cwd: repo });
+  run("git", ["commit", "-m", "init"], { cwd: repo });
+  fs.writeFileSync(path.join(repo, "README.md"), "changed\n");
+  const env = buildEnv(binDir);
+
+  const task = run("node", [SCRIPT, "task", "initial task"], { cwd: repo, env });
+  assert.equal(task.status, 0, task.stderr);
+  let fakeState = JSON.parse(fs.readFileSync(statePath, "utf8"));
+  assert.equal(fakeState.lastTurnStart.model, "gpt-6-sol");
+  let jobs = JSON.parse(fs.readFileSync(path.join(resolveStateDir(repo), "state.json"), "utf8")).jobs;
+  assert.equal(jobs[0].model, "gpt-6-sol");
+
+  const continued = run("node", [SCRIPT, "continue", "thr_1", "follow up"], { cwd: repo, env });
+  assert.equal(continued.status, 0, continued.stderr);
+  fakeState = JSON.parse(fs.readFileSync(statePath, "utf8"));
+  assert.equal(fakeState.lastTurnStart.model, null);
+  jobs = JSON.parse(fs.readFileSync(path.join(resolveStateDir(repo), "state.json"), "utf8")).jobs;
+  assert.equal(jobs[0].model, null);
+
+  const resumed = run("node", [SCRIPT, "task", "--resume-last", "another follow up"], { cwd: repo, env });
+  assert.equal(resumed.status, 0, resumed.stderr);
+  fakeState = JSON.parse(fs.readFileSync(statePath, "utf8"));
+  assert.equal(fakeState.lastTurnStart.model, null);
+
+  const review = run("node", [SCRIPT, "review"], { cwd: repo, env });
+  assert.equal(review.status, 0, review.stderr);
+  fakeState = JSON.parse(fs.readFileSync(statePath, "utf8"));
+  assert.equal(fakeState.lastThreadStart.params.model, "gpt-6-sol");
+  jobs = JSON.parse(fs.readFileSync(path.join(resolveStateDir(repo), "state.json"), "utf8")).jobs;
+  assert.equal(jobs[0].model, "gpt-6-sol");
+
+  const adversarial = run("node", [SCRIPT, "adversarial-review"], { cwd: repo, env });
+  assert.equal(adversarial.status, 0, adversarial.stderr);
+  fakeState = JSON.parse(fs.readFileSync(statePath, "utf8"));
+  assert.equal(fakeState.lastTurnStart.model, "gpt-6-sol");
+  jobs = JSON.parse(fs.readFileSync(path.join(resolveStateDir(repo), "state.json"), "utf8")).jobs;
+  assert.equal(jobs[0].model, "gpt-6-sol");
+
+  const overrideEnv = { ...env, CODEX_COMPANION_DEFAULT_MODEL: "luna" };
+  const overridden = run("node", [SCRIPT, "task", "fresh with env default"], { cwd: repo, env: overrideEnv });
+  assert.equal(overridden.status, 0, overridden.stderr);
+  fakeState = JSON.parse(fs.readFileSync(statePath, "utf8"));
+  assert.equal(fakeState.lastTurnStart.model, "gpt-6-luna");
+  jobs = JSON.parse(fs.readFileSync(path.join(resolveStateDir(repo), "state.json"), "utf8")).jobs;
+  assert.equal(jobs[0].model, "gpt-6-luna");
+});
+
+test("task maps every GPT-6 and legacy model alias and caps reasoning effort at high", () => {
   const repo = makeTempDir();
   const binDir = makeTempDir();
   const statePath = path.join(binDir, "fake-codex-state.json");
@@ -815,9 +869,13 @@ test("task maps GPT-5.6 model aliases and caps reasoning effort at high", () => 
   run("git", ["commit", "-m", "init"], { cwd: repo });
 
   const cases = [
-    { alias: "sol", slug: "gpt-5.6-sol", effort: "high" },
+    { alias: "astra", slug: "gpt-6-astra", effort: "medium" },
+    { alias: "sol", slug: "gpt-6-sol", effort: "high" },
+    { alias: "luna", slug: "gpt-6-luna", effort: "none" },
+    { alias: "sol-5.6", slug: "gpt-5.6-sol", effort: "high" },
     { alias: "terra", slug: "gpt-5.6-terra", effort: "medium" },
-    { alias: "luna", slug: "gpt-5.6-luna", effort: "low" }
+    { alias: "luna-5.6", slug: "gpt-5.6-luna", effort: "low" },
+    { alias: "spark", slug: "gpt-5.3-codex-spark", effort: "low" }
   ];
   for (const { alias, slug, effort } of cases) {
     const result = run("node", [SCRIPT, "task", "--model", alias, "--effort", effort, "diagnose the failing test"], {
@@ -837,6 +895,30 @@ test("task maps GPT-5.6 model aliases and caps reasoning effort at high", () => 
     });
     assert.notEqual(rejected.status, 0, `effort ${effort} should be rejected`);
     assert.match(`${rejected.stderr}${rejected.stdout}`, /Unsupported reasoning effort/i);
+  }
+});
+
+test("astra effort policy rejects high, none, and minimal before launch", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  const statePath = path.join(binDir, "fake-codex-state.json");
+  installFakeCodex(binDir);
+  initGitRepo(repo);
+  const env = buildEnv(binDir);
+  for (const effort of ["high", "none", "minimal"]) {
+    const result = run("node", [SCRIPT, "task", "--model", "astra", "--effort", effort, "diagnose"], { cwd: repo, env });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, effort === "high"
+      ? /gpt-6-astra is capped at --effort medium by policy \(cost\)\. Use --effort medium or lower, or pick sol\./
+      : /gpt-6-astra does not support --effort none\/minimal; use low or medium\./);
+    assert.equal(fs.existsSync(statePath), false);
+  }
+  for (const [effort, expected] of [[null, "medium"], ["low", "low"]]) {
+    const args = [SCRIPT, "task", "--model", "astra", ...(effort ? ["--effort", effort] : []), "diagnose"];
+    const result = run("node", args, { cwd: repo, env });
+    assert.equal(result.status, 0, result.stderr);
+    const fakeState = JSON.parse(fs.readFileSync(statePath, "utf8"));
+    assert.equal(fakeState.lastTurnStart.effort, expected);
   }
 });
 
@@ -1036,6 +1118,39 @@ test("task using the shared broker still completes when Codex spawns subagents",
 
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.stdout, "Handled the requested task.\nTask prompt accepted.\n");
+});
+
+test("concurrent background launches publish requests before workers read them", async () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  installFakeCodex(binDir);
+  initGitRepo(repo);
+  fs.writeFileSync(path.join(repo, "README.md"), "hello\n");
+  run("git", ["add", "README.md"], { cwd: repo });
+  run("git", ["commit", "-m", "init"], { cwd: repo });
+  const env = buildEnv(binDir);
+  const launches = await Promise.all(Array.from({ length: 3 }, (_, index) => new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [SCRIPT, "task", "--background", "--json", `parallel request ${index}`], { cwd: repo, env });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => { stdout += chunk; });
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    child.on("error", reject);
+    child.on("close", (code) => code === 0 ? resolve(JSON.parse(stdout)) : reject(new Error(stderr)));
+  })));
+  const ids = launches.map((launch) => launch.jobId);
+  assert.equal(new Set(ids).size, 3);
+  await waitFor(() => {
+    const jobs = JSON.parse(fs.readFileSync(path.join(resolveStateDir(repo), "state.json"), "utf8")).jobs;
+    return ids.every((id) => ["completed", "failed", "interrupted"].includes(jobs.find((job) => job.id === id)?.status));
+  }, { timeoutMs: 30000 });
+  for (const id of ids) {
+    const stored = JSON.parse(fs.readFileSync(path.join(resolveStateDir(repo), "jobs", `${id}.json`), "utf8"));
+    const log = fs.readFileSync(stored.logFile, "utf8");
+    assert.doesNotMatch(log, /No stored job found/);
+    assert.equal(stored.status, "completed", log);
+    assert.equal(stored.model, "gpt-6-sol");
+  }
 });
 
 test("task --background enqueues a detached worker and exposes per-job status", async () => {
@@ -2105,6 +2220,7 @@ test("stop hook runs a stop-time review task and blocks on findings when the rev
   assert.match(blockedPayload.reason, /Missing empty-state guard/i);
 
   const fakeState = JSON.parse(fs.readFileSync(fakeStatePath, "utf8"));
+  assert.equal(fakeState.lastTurnStart.model, "gpt-6-sol");
   assert.match(fakeState.lastTurnStart.prompt, /<task>/i);
   assert.match(fakeState.lastTurnStart.prompt, /<compact_output_contract>/i);
   assert.match(fakeState.lastTurnStart.prompt, /Only review the work from the previous Claude turn/i);

@@ -474,6 +474,12 @@ rl.on("line", (line) => {
       }
 
 	      case "turn/start": {
+	        if (BEHAVIOR === "broker-busy-after-thread-start" && !state.injectedBusyTurnStart) {
+	          state.injectedBusyTurnStart = true;
+	          saveState(state);
+	          send({ id: message.id, error: { code: -32001, message: "Shared Codex broker is busy after thread/start." } });
+	          break;
+	        }
 	        const thread = ensureThread(state, message.params.threadId);
 	        const prompt = (message.params.input || [])
           .filter((item) => item.type === "text")

@@ -161,9 +161,9 @@ Examples:
 /codex:rescue investigate why the tests started failing
 /codex:rescue fix the failing test with the smallest safe patch
 /codex:rescue --resume apply the top fix from the last run
-/codex:rescue --model sol --effort high redesign the retry pipeline across services
-/codex:rescue --model terra --effort medium investigate the flaky integration test
-/codex:rescue --model luna --effort low look up how the config loader resolves paths
+/codex:rescue --model astra --effort medium redesign the retry pipeline across services
+/codex:rescue --model sol --effort high investigate the flaky integration test
+/codex:rescue --model luna --effort none look up how the config loader resolves paths
 /codex:rescue --background investigate the regression
 ```
 
@@ -175,9 +175,9 @@ Ask Codex to redesign the database connection to be more resilient.
 
 **Notes:**
 
-- if you do not pass `--model` or `--effort`, Codex chooses its own defaults.
-- model aliases for the GPT-5.6 family: `sol` → `gpt-5.6-sol` (frontier agentic coding; orchestrates its own subagents), `terra` → `gpt-5.6-terra` (balanced everyday model), `luna` → `gpt-5.6-luna` (fast and cheap). Legacy: `spark` → `gpt-5.3-codex-spark`. The 5.6 models require Codex CLI ≥ 0.144.0.
-- accepted `--effort` values: `none`, `minimal`, `low`, `medium`, `high` — `high` is the plugin ceiling by policy
+- Fresh tasks and reviews default to `gpt-6-sol`; set `CODEX_COMPANION_DEFAULT_MODEL` to an alias or model name to override it. A follow-up (`continue` or `task --resume-last`) keeps its thread's model unless you pass `--model`.
+- GPT-6 aliases: `astra` → `gpt-6-astra` (frontier, expensive; use sparingly; effort `low` or `medium` only), `sol` → `gpt-6-sol` (default workhorse for coding and reviews), `luna` → `gpt-6-luna` (near-free, fast; strong for bulk, vision, research, and strictly specified coding; supports effort `none`). Legacy aliases: `sol-5.6` → `gpt-5.6-sol`, `terra` → `gpt-5.6-terra`, `luna-5.6` → `gpt-5.6-luna`, `spark` → `gpt-5.3-codex-spark`.
+- Accepted `--effort` values: `none`, `minimal`, `low`, `medium`, `high`. The general policy ceiling is `high`; `gpt-6-astra` accepts only `low` or `medium` and uses `medium` when effort is omitted.
 - follow-up rescue requests can continue the latest Codex task in the repo
 
 ### `/codex:transfer`
@@ -250,7 +250,7 @@ You can also use `/codex:setup` to manage the optional review gate.
 /codex:setup --disable-review-gate
 ```
 
-When the review gate is enabled, the plugin uses a `Stop` hook to run a targeted Codex review based on Claude's response. If that review finds issues, the stop is blocked so Claude can address them first.
+When the review gate is enabled, the plugin uses a `Stop` hook to run a targeted Codex review based on Claude's response. It defaults to `gpt-6-sol` (or `CODEX_COMPANION_DEFAULT_MODEL`). If that review finds issues, the stop is blocked so Claude can address them first.
 
 > [!WARNING]
 > The review gate can create a long-running Claude/Codex loop and may drain usage limits quickly. Only enable it when you plan to actively monitor the session.
@@ -313,10 +313,9 @@ The Codex plugin wraps the [Codex app server](https://developers.openai.com/code
 
 ### Common Configurations
 
-If you want to change the default reasoning effort or the default model that gets used by the plugin, you can define that inside your user-level or project-level `config.toml`. For example to always use `gpt-5.6-terra` on `high` for a specific project you can add the following to a `.codex/config.toml` file at the root of the directory you started Claude in:
+Fresh plugin tasks and reviews set their model explicitly to `gpt-6-sol`; use `CODEX_COMPANION_DEFAULT_MODEL` to change that default. `config.toml` still supplies other Codex settings, including reasoning effort when `--effort` is omitted (except `gpt-6-astra`, which the plugin sets to `medium`). For example, to use `high` effort with the default workhorse model for a trusted project, add this to `.codex/config.toml` at the root of the directory you started Claude in:
 
 ```toml
-model = "gpt-5.6-terra"
 model_reasoning_effort = "high"
 ```
 

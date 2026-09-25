@@ -38,6 +38,7 @@ type StartRequestResponse = AppServerResponse<"review/start"> | AppServerRespons
 
 interface ThreadOptions {
   model?: string | null;
+  config?: ThreadStartParams["config"];
   approvalPolicy?: ThreadStartParams["approvalPolicy"] | null;
   sandbox?: ThreadStartParams["sandbox"] | null;
   ephemeral?: boolean;
@@ -76,6 +77,7 @@ interface CaptureTurnOptions {
 
 interface WithSteerableAppServerOptions {
   onEndpoint?: ((endpoint: string | null, transport: AppServerTransport) => void) | null;
+  onRetry?: ((error: Error) => void) | null;
 }
 
 interface AuthStatusFields {
@@ -174,6 +176,7 @@ function buildThreadParams(cwd, options: ThreadOptions = {}): ThreadStartParams 
     cwd,
     environments: [{ environmentId: "local", cwd }],
     model: options.model ?? null,
+    config: options.config ?? null,
     approvalPolicy: options.approvalPolicy ?? "never",
     sandbox: options.sandbox ?? "read-only",
     serviceName: SERVICE_NAME,
@@ -370,6 +373,20 @@ function registerThread(state, threadId, options: RegisterThreadOptions = {}) {
   }
 }
 
+export function renderWebSearchProgress(item: Extract<ThreadItem, { type: "webSearch" }>): string {
+  const action = item.action;
+  if (action?.type === "openPage") {
+    return `Opening: ${shorten(action.url ?? item.query, 120)}`;
+  }
+  if (action?.type === "findInPage") {
+    return `Searching page: ${shorten(action.url ?? item.query, 120)}`;
+  }
+  const query = action?.type === "search"
+    ? action.query || action.queries?.filter(Boolean).join(", ") || item.query
+    : item.query;
+  return `Searching: ${shorten(query, 120)}`;
+}
+
 function describeStartedItem(state, item) {
   switch (item.type) {
     case "enteredReviewMode":
@@ -394,7 +411,7 @@ function describeStartedItem(state, item) {
       return { message: summary, phase: "investigating" };
     }
     case "webSearch":
-      return { message: `Searching: ${shorten(item.query, 96)}`, phase: "investigating" };
+      return { message: renderWebSearchProgress(item), phase: "investigating" };
     default:
       return null;
   }
@@ -889,9 +906,9 @@ async function captureTurn(
     const cause = client.exitError;
     const diagnostics = client.runtimeDiagnosticTail?.(20) ?? "";
     const diagnosticSuffix = diagnostics ? `\nBroker/app-server stderr tail:\n${diagnostics}` : "";
-    const message = `The Codex runtime connection closed before the turn completed (broker or app-server went away).${
-      cause?.message ? ` Cause: ${cause.message}` : ""
-    }${diagnosticSuffix}`;
+    const closeReason = cause?.message ??
+      (client.transport === "broker" ? `broker socket closed without an error (${client.endpoint ?? "unknown endpoint"})` : "app-server process closed without an error");
+    const message = `The Codex runtime connection closed before the turn completed (broker or app-server went away). Cause: ${closeReason}${diagnosticSuffix}`;
     const script = process.argv[1] ?? "scripts/codex-companion.mts";
     const salvageCommand = `node ${JSON.stringify(script)} continue ${threadId} --prompt-stdin --background`;
     const connectionError = new Error(message) as Error & { recoveryText: string; threadId: string };
@@ -995,6 +1012,15 @@ async function captureTurn(
     }
 
     return await state.completion;
+  } catch (error) {
+    // A rejected turn/start is handled by the caller (which may retry on a
+    // dedicated broker). Closing this client must not report a second,
+    // misleading connection-loss failure for a turn that never started.
+    if (!state.completed) {
+      state.completed = true;
+      state.rejectCompletion(error);
+    }
+    throw error;
   } finally {
     if (idleReconciler) {
       clearInterval(idleReconciler);
@@ -1077,6 +1103,8 @@ async function withSteerableAppServer<T>(
     if (!shouldRetry) {
       throw error;
     }
+
+    options.onRetry?.(error instanceof Error ? error : new Error(String(error)));
 
     const session = await createDedicatedBrokerSession(cwd, { killProcess: terminateProcessTree });
     if (!session) {
@@ -1193,9 +1221,15 @@ async function requestExternalAgentSessionImport(client, params) {
   }
 }
 
-async function startThread(client: AppServerClientInstance, cwd, options: ThreadOptions = {}): Promise<AppServerResponse<"thread/start">> {
+async function startThread(
+  client: AppServerClientInstance,
+  cwd,
+  options: ThreadOptions = {},
+  onCreated: ((threadId: string) => void) | null = null
+): Promise<AppServerResponse<"thread/start">> {
   const response = await client.request("thread/start", buildThreadParams(cwd, options));
   const threadId = response.thread.id;
+  onCreated?.(threadId);
   if (options.threadName) {
     try {
       await client.request("thread/name/set", { threadId, name: options.threadName });
@@ -1617,6 +1651,9 @@ export async function runAppServerReview(cwd, options: RunAppServerReviewOptions
     emitProgress(options.onProgress, "Starting Codex review thread.", "starting");
     const thread = await startThread(client, cwd, {
       model: options.model,
+      // Native review/start has no per-turn effort override. Pin Astra at its
+      // policy ceiling when creating the review source thread.
+      config: options.model === "gpt-6-astra" ? { model_reasoning_effort: "medium" } : null,
       sandbox: "read-only",
       ephemeral: true,
       threadName: options.threadName
@@ -1722,12 +1759,17 @@ export async function runAppServerTurn(cwd, options: RunAppServerTurnOptions = {
     throw new Error("Codex CLI is not installed or is missing required runtime support. Install it with `npm install -g @openai/codex`, then rerun `/codex:setup`.");
   }
 
+  // A broker can become busy between thread/start and turn/start. Preserve the
+  // thread across the dedicated-broker retry so that the first start does not
+  // leave an unused persistent thread behind.
+  let createdThreadId: string | null = null;
   return withSteerableAppServer(cwd, async (client) => {
     let threadId;
 
-    if (options.resumeThreadId) {
-      emitProgress(options.onProgress, `Resuming thread ${options.resumeThreadId}.`, "starting");
-      const response = await resumeThread(client, options.resumeThreadId, cwd, {
+    const resumeThreadId = createdThreadId ?? options.resumeThreadId;
+    if (resumeThreadId) {
+      emitProgress(options.onProgress, `Resuming thread ${resumeThreadId}.`, "starting");
+      const response = await resumeThread(client, resumeThreadId, cwd, {
         model: options.model,
         sandbox: options.sandbox,
         ephemeral: false
@@ -1740,7 +1782,7 @@ export async function runAppServerTurn(cwd, options: RunAppServerTurnOptions = {
         sandbox: options.sandbox,
         ephemeral: options.persistThread ? false : true,
         threadName: options.persistThread ? options.threadName : options.threadName ?? null
-      });
+      }, (id) => { createdThreadId = id; });
       threadId = response.thread.id;
     }
 
@@ -1809,7 +1851,12 @@ export async function runAppServerTurn(cwd, options: RunAppServerTurnOptions = {
       touchedFiles: collectTouchedFiles(turnState.fileChanges),
       commandExecutions: turnState.commandExecutions
     };
-  }, { onEndpoint: options.onRuntimeEndpoint });
+  }, {
+    onEndpoint: options.onRuntimeEndpoint,
+    onRetry: (error) => {
+      emitProgress(options.onProgress, `Retrying Codex runtime with a dedicated broker: ${shorten(error.message, 220)}`, "starting");
+    }
+  });
 }
 
 export async function findLatestTaskThread(cwd) {
