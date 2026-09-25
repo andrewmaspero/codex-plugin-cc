@@ -205,7 +205,8 @@ export async function runTrackedJob(job: JobRecord, runner: () => Promise<Tracke
       rendered: execution.rendered,
       summary: terminalSummary,
       errorMessage: null,
-      reconciledBy: null
+      reconciledBy: null,
+      turnReconcileProbe: null
     });
     upsertJob(job.workspaceRoot, {
       id: job.id,
@@ -217,8 +218,12 @@ export async function runTrackedJob(job: JobRecord, runner: () => Promise<Tracke
       pid: null,
       completedAt,
       errorMessage: null,
-      reconciledBy: null
+      reconciledBy: null,
+      turnReconcileProbe: null
     });
+    if (currentRecord.status === "failed" && currentRecord.reconciledBy === "read-reconciler") {
+      appendLogLine(options.logFile ?? job.logFile ?? null, `Worker completion replaced a read-side reconciler failure with ${completionStatus}.`);
+    }
     writeJobVisibilityMarker(job.workspaceRoot, { ...job, ...runningRecord }, completionStatus, terminalSummary);
     appendLogBlock(options.logFile ?? job.logFile ?? null, "Final output", execution.rendered);
     return execution;
@@ -233,6 +238,8 @@ export async function runTrackedJob(job: JobRecord, runner: () => Promise<Tracke
       status: terminalStatus,
       phase: terminalStatus,
       errorMessage,
+      reconciledBy: null,
+      turnReconcileProbe: null,
       pid: null,
       completedAt,
       ...(recoverable
@@ -254,8 +261,13 @@ export async function runTrackedJob(job: JobRecord, runner: () => Promise<Tracke
       phase: terminalStatus,
       pid: null,
       errorMessage,
+      reconciledBy: null,
+      turnReconcileProbe: null,
       completedAt
     });
+    if (existing.status === "failed" && existing.reconciledBy === "read-reconciler") {
+      appendLogLine(options.logFile ?? job.logFile ?? null, `Worker terminal failure replaced a read-side reconciler failure with ${terminalStatus}.`);
+    }
     writeJobVisibilityMarker(job.workspaceRoot, { ...job, ...existing }, terminalStatus, recoverable ?? errorMessage);
     throw error;
   }

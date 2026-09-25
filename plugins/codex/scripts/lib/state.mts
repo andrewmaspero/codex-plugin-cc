@@ -53,6 +53,7 @@ export interface JobRecord {
   runCwd?: string | null;
   brokerEndpoint?: string | null;
   brokerTransport?: "shared" | "dedicated" | "direct" | "closed" | string | null;
+  reconciledBy?: string | null;
   worktree?: JobWorktreeInfo | null;
   progress?: string[];
   reasoningSummary?: string[];

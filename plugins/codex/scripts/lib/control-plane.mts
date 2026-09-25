@@ -895,6 +895,7 @@ export function renderArtifacts(payload) {
 // --- completed-but-unreconciled reconciliation ------------------------------
 
 const RECONCILE_QUIET_MS = 60 * 1000;
+const RECONCILE_CONFIRM_MS = 30 * 1000;
 const TERMINAL_TURN_STATUSES = new Set(["completed", "failed", "interrupted"]);
 
 function jobLastActivityMs(job) {
@@ -913,7 +914,7 @@ function extractTurnStatusValue(turn) {
   return typeof turn?.status === "string" ? turn.status : turn?.status?.type ?? null;
 }
 
-function finalizeReconciledJob(workspaceRoot, job, latestTurn, status, lastAgentText) {
+function finalizeReconciledJob(workspaceRoot, job, latestTurn, status, lastAgentText, activityMs) {
   const completedAt = new Date().toISOString();
   const jobStatus = status === "completed" ? "completed" : "failed";
   const summary = oneLineSummary(
@@ -924,9 +925,9 @@ function finalizeReconciledJob(workspaceRoot, job, latestTurn, status, lastAgent
   const patch = {
     status: jobStatus,
     phase: jobStatus === "completed" ? "done" : "failed",
-    pid: null,
     completedAt,
     reconciledBy: "read-reconciler",
+    turnReconcileProbe: null,
     summary,
     lastActivity: buildLastActivity(
       { message: lastAgentText ?? note, phase: jobStatus === "completed" ? "done" : "failed" },
@@ -943,6 +944,9 @@ function finalizeReconciledJob(workspaceRoot, job, latestTurn, status, lastAgent
     }
     const current = state.jobs[index];
     if (current.status !== "running" && current.status !== "queued") {
+      return;
+    }
+    if (isProcessAlive(current.pid) === true || jobLastActivityMs(current) !== activityMs) {
       return;
     }
     state.jobs[index] = { ...current, ...patch, updatedAt: completedAt };
@@ -978,10 +982,9 @@ function finalizeReconciledJob(workspaceRoot, job, latestTurn, status, lastAgent
 
 /**
  * Detect running jobs whose thread already has a terminal latest turn newer
- * than the job's last activity, and finalize them inline. This is the
- * read-side safety net for alive-but-hung workers (pid checks pass, so
- * reapOrphanedJobs never fires): `status --wait` and `alerts` finalize the
- * job instead of waiting on a worker that will never write again.
+ * than the job's last activity, and finalize them inline once the worker is
+ * gone. A non-completed turn needs a second stable sample because compaction
+ * can temporarily report an active turn as interrupted.
  * Returns descriptors of the jobs it reconciled.
  */
 export async function reconcileCompletedTurnJobs(cwd, jobs: JobRecord[], options: ReconcileCompletedTurnJobsOptions = {}) {
@@ -998,6 +1001,9 @@ export async function reconcileCompletedTurnJobs(cwd, jobs: JobRecord[], options
     if (!job.threadId) {
       return false;
     }
+    if (isProcessAlive(job.pid) === true) {
+      return false;
+    }
     return now - jobLastActivityMs(job) >= quietMs;
   });
   if (candidates.length === 0) {
@@ -1008,6 +1014,14 @@ export async function reconcileCompletedTurnJobs(cwd, jobs: JobRecord[], options
   for (const job of candidates) {
     const workspaceRoot = job.workspaceRoot ?? resolveWorkspaceRoot(cwd);
     try {
+      const current = listJobs(workspaceRoot).find((entry) => entry.id === job.id);
+      if (!current || (current.status !== "running" && current.status !== "queued") || isProcessAlive(current.pid) === true) {
+        continue;
+      }
+      const activityMs = jobLastActivityMs(current);
+      if (now - activityMs < quietMs) {
+        continue;
+      }
       const outcome = await withReadClient(job.runCwd ?? workspaceRoot, async (client) => {
         const response = await client.request("thread/turns/list", {
           threadId: job.threadId,
@@ -1022,13 +1036,6 @@ export async function reconcileCompletedTurnJobs(cwd, jobs: JobRecord[], options
       if (!outcome || !TERMINAL_TURN_STATUSES.has(status)) {
         continue;
       }
-      // `interrupted` (and occasionally `failed`) is transient while a live
-      // worker is surviving compaction/reconnect. Only `completed` is strong
-      // enough to reconcile an alive-but-event-starved worker; otherwise the
-      // worker process must be confirmed dead before read-side finalization.
-      if (status !== "completed" && isProcessAlive(job.pid) !== false) {
-        continue;
-      }
       // Only reconcile when the terminal turn belongs to this job's run: it
       // must have started at or after the job did (a resumed thread's stale
       // last turn must not complete a job whose own turn never started).
@@ -1037,8 +1044,23 @@ export async function reconcileCompletedTurnJobs(cwd, jobs: JobRecord[], options
       if (turnEndedMs && jobStartedMs && turnEndedMs < jobStartedMs - 5000) {
         continue;
       }
+      if (status !== "completed") {
+        const probe = current.turnReconcileProbe as { turnId: string; status: string; observedAt: number; activityMs: number } | undefined;
+        if (!probe || probe.turnId !== outcome.id || probe.status !== status || probe.activityMs !== activityMs) {
+          updateState(workspaceRoot, (state) => {
+            const entry = state.jobs.find((candidate) => candidate.id === job.id);
+            if (entry && (entry.status === "running" || entry.status === "queued") && isProcessAlive(entry.pid) !== true) {
+              entry.turnReconcileProbe = { turnId: outcome.id, status, observedAt: now, activityMs };
+            }
+          });
+          continue;
+        }
+        if (now - probe.observedAt < RECONCILE_CONFIRM_MS) {
+          continue;
+        }
+      }
       const lastAgent = [...(outcome.items ?? [])].reverse().find((item) => item?.type === "agentMessage" && item.text);
-      if (finalizeReconciledJob(workspaceRoot, job, outcome, status, lastAgent?.text ?? null)) {
+      if (finalizeReconciledJob(workspaceRoot, job, outcome, status, lastAgent?.text ?? null, activityMs)) {
         reconciled.push({ jobId: job.id, threadId: job.threadId, turnId: outcome.id, turnStatus: status });
       }
     } catch {
@@ -1208,9 +1230,8 @@ export async function buildAlertsSnapshot(cwd, reference = "", options: BuildAle
   // of an advisory on a job that still claims to be running.
   let jobs = sortJobsNewestFirst(reapOrphanedJobs(workspaceRoot, listJobs(workspaceRoot)));
 
-  // Alive-but-hung workers: finalize running jobs whose thread already shows
-  // a terminal latest turn, and surface each as a precise alert instead of a
-  // generic "stalled".
+  // Reconcile only workers confirmed gone; keep live turns and their brokers
+  // intact even when compaction temporarily reports an interrupted turn.
   const reconciledJobs =
     options.reconcileTurns === false ? [] : await reconcileCompletedTurnJobs(cwd, jobs, options).catch(() => []);
   if (reconciledJobs.length > 0) {

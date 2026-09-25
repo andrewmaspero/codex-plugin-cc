@@ -8,7 +8,8 @@ import type { ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { createBrokerEndpoint, parseBrokerEndpoint } from "./broker-endpoint.mts";
 import { buildChildEnv } from "./env.mts";
-import { resolveStateDir } from "./state.mts";
+import { listJobs, resolveStateDir } from "./state.mts";
+import { isProcessAlive } from "./process.mts";
 import type { TerminateProcessTreeOptions } from "./process.mts";
 
 export const PID_FILE_ENV = "CODEX_COMPANION_APP_SERVER_PID_FILE";
@@ -151,6 +152,17 @@ export function clearBrokerSession(cwd: string): void {
   if (fs.existsSync(stateFile)) {
     fs.unlinkSync(stateFile);
   }
+}
+
+/** A terminal-looking record may still belong to a worker in mid-turn compaction. */
+export function hasLiveBrokerJob(workspaceRoot: string, cwd: string, endpoint: string | null): boolean {
+  return listJobs(workspaceRoot).some((job) =>
+    isProcessAlive(job.pid) === true && (
+      (endpoint != null && job.brokerEndpoint === endpoint) ||
+      job.runCwd === cwd ||
+      (!job.runCwd && job.workspaceRoot === cwd)
+    )
+  );
 }
 
 async function isBrokerEndpointReady(endpoint: string | null | undefined): Promise<boolean> {

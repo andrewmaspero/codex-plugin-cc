@@ -971,9 +971,7 @@ async function executeTaskRun(request) {
     throw new Error("Provide a prompt, a prompt file, piped stdin, or use --resume-last.");
   }
 
-  let result;
-  try {
-    result = await runAppServerTurn(request.cwd, {
+  const result = await runAppServerTurn(request.cwd, {
       resumeThreadId,
       prompt: request.prompt,
       defaultPrompt: resumeThreadId ? DEFAULT_CONTINUE_PROMPT : "",
@@ -985,18 +983,10 @@ async function executeTaskRun(request) {
       onProgress: request.onProgress,
       persistThread: true,
       threadName: resumeThreadId ? null : buildPersistentTaskThreadName(request.prompt || DEFAULT_CONTINUE_PROMPT)
-    });
-  } finally {
-    if (request.worktree?.worktreePath) {
-      // The worktree job registered a broker keyed to the worktree; reap it
-      // so no broker/app-server outlives the job.
-      await teardownWorkspaceBrokerSession(request.cwd).catch(() => {});
-      onRuntimeEndpoint?.(null, "closed");
-    }
-  }
+  });
 
   const rawOutput = typeof result.finalMessage === "string" ? result.finalMessage : "";
-  const failureMessage = result.error?.message ?? result.stderr ?? "";
+  const failureMessage = result.error instanceof Error ? result.error.message : result.stderr ?? "";
   let rendered = renderTaskResult(
     {
       rawOutput,
@@ -1229,7 +1219,15 @@ async function runForegroundCommand(
     logFile: options.logFile,
     stderr: !options.json
   });
-  const execution = await runTrackedJob(job, () => runner(progress), { logFile });
+  let execution;
+  try {
+    execution = await runTrackedJob(job, () => runner(progress), { logFile });
+  } finally {
+    if (job.worktree?.worktreePath) {
+      await teardownWorkspaceBrokerSession(job.runCwd ?? job.workspaceRoot, job.workspaceRoot).catch(() => {});
+      upsertJob(job.workspaceRoot, { id: job.id, brokerEndpoint: null, brokerTransport: "closed" });
+    }
+  }
   outputResult(options.json ? execution.payload : execution.rendered, options.json);
   if (execution.exitStatus !== 0) {
     process.exitCode = execution.exitStatus;
@@ -1579,26 +1577,33 @@ async function handleTaskWorker(argv) {
     }
   );
   lastGaspLogFile = logFile;
-  await runTrackedJob(
-    {
-      ...storedJob,
-      workspaceRoot,
-      logFile
-    },
-    () => {
-      if (request.kind === "review") {
-        return executeReviewRun({
+  try {
+    await runTrackedJob(
+      {
+        ...storedJob,
+        workspaceRoot,
+        logFile
+      },
+      () => {
+        if (request.kind === "review") {
+          return executeReviewRun({
+            ...request,
+            onProgress: progress
+          });
+        }
+        return executeTaskRun({
           ...request,
           onProgress: progress
         });
-      }
-      return executeTaskRun({
-        ...request,
-        onProgress: progress
-      });
-    },
-    { logFile }
-  );
+      },
+      { logFile }
+    );
+  } finally {
+    if (storedJob.worktree?.worktreePath) {
+      await teardownWorkspaceBrokerSession(storedJob.runCwd ?? cwd, workspaceRoot).catch(() => {});
+      upsertJob(workspaceRoot, { id: storedJob.id, brokerEndpoint: null, brokerTransport: "closed" });
+    }
+  }
 }
 
 async function handleStatus(argv) {

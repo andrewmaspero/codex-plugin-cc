@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 import { buildEnv, installFakeCodex } from "./fake-codex-fixture.mjs";
 import { initGitRepo, makeTempDir, run } from "./helpers.mjs";
 import { loadBrokerSession } from "../plugins/codex/scripts/lib/broker-lifecycle.mts";
-import { resolveStateDir } from "../plugins/codex/scripts/lib/state.mts";
+import { resolveStateDir, upsertJob } from "../plugins/codex/scripts/lib/state.mts";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PLUGIN_ROOT = path.join(ROOT, "plugins", "codex");
@@ -186,6 +186,47 @@ test("ending one Claude session does not kill another session's live shared-brok
       cwd: repo,
       env,
       input: JSON.stringify({ hook_event_name: "SessionEnd", cwd: repo, session_id: "session-a" })
+    });
+  }
+});
+
+test("session end preserves a broker behind a reconciled failure with a live worker", async () => {
+  const repo = makeRepo();
+  const binDir = makeTempDir();
+  installFakeCodex(binDir, "interruptible-slow-task");
+  const env = { ...cleanEnv(binDir), CODEX_COMPANION_SESSION_ID: "session-reconciled" };
+  env.FAKE_CODEX_HOLD_TURNS = "1";
+  let workerPid = null;
+  try {
+    const launch = run("node", [SCRIPT, "task", "--background", "--json", "live turn"], { cwd: repo, env });
+    assert.equal(launch.status, 0, launch.stderr);
+    const jobId = JSON.parse(launch.stdout).jobId;
+    const running = await waitFor(() => {
+      const job = readJobs(repo).find((candidate) => candidate.id === jobId);
+      return job?.status === "running" && job.turnId ? job : null;
+    });
+    workerPid = running.pid;
+    const broker = loadBrokerSession(repo);
+    assert.ok(broker?.pid);
+    upsertJob(repo, { id: jobId, status: "failed", phase: "failed", reconciledBy: "read-reconciler" });
+    const ended = run("node", [SESSION_HOOK, "SessionEnd"], {
+      cwd: repo,
+      env,
+      input: JSON.stringify({ hook_event_name: "SessionEnd", cwd: repo, session_id: "session-reconciled" })
+    });
+    assert.equal(ended.status, 0, ended.stderr);
+    assert.equal(readJobs(repo).find((job) => job.id === jobId)?.pid, workerPid);
+    assert.ok(loadBrokerSession(repo));
+    assert.doesNotThrow(() => process.kill(broker.pid, 0));
+    assert.doesNotThrow(() => process.kill(workerPid, 0));
+  } finally {
+    if (workerPid) {
+      try { process.kill(workerPid, "SIGKILL"); } catch {}
+    }
+    run("node", [SESSION_HOOK, "SessionEnd"], {
+      cwd: repo,
+      env,
+      input: JSON.stringify({ hook_event_name: "SessionEnd", cwd: repo, session_id: "session-reconciled" })
     });
   }
 });

@@ -17,7 +17,8 @@ import type { JsonValue } from "../../.generated/app-server-types/serde_json/Jso
 
 import { readJsonFile } from "./fs.mts";
 import { BROKER_BUSY_RPC_CODE, BROKER_ENDPOINT_ENV, CodexAppServerClient } from "./app-server.mts";
-import { clearBrokerSession, createDedicatedBrokerSession, loadBrokerSession, sendBrokerShutdown, teardownBrokerSession } from "./broker-lifecycle.mts";
+import { clearBrokerSession, createDedicatedBrokerSession, hasLiveBrokerJob, loadBrokerSession, sendBrokerShutdown, teardownBrokerSession } from "./broker-lifecycle.mts";
+import { resolveWorkspaceRoot } from "./workspace.mts";
 import { binaryAvailable, terminateProcessTree } from "./process.mts";
 
 type ProgressUpdate =
@@ -1742,9 +1743,12 @@ export async function importExternalAgentSession(cwd, options: ImportExternalAge
  * Worktree jobs register a broker keyed to the worktree; without this the
  * broker (and its codex app-server) outlives the job and the worktree.
  */
-export async function teardownWorkspaceBrokerSession(cwd) {
+export async function teardownWorkspaceBrokerSession(cwd, workspaceRoot = resolveWorkspaceRoot(cwd)) {
   const session = loadBrokerSession(cwd);
   if (!session) {
+    return false;
+  }
+  if (hasLiveBrokerJob(workspaceRoot, cwd, session.endpoint)) {
     return false;
   }
   await sendBrokerShutdown(session.endpoint).catch(() => {});
