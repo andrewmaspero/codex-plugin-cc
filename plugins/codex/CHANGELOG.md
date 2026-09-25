@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.10.0 (fork)
+
+Read-only chat bridge MCP server.
+
+- Added `chat-bridge`, a stdio MCP server (`scripts/chat-bridge-mcp.mts`, registered in the plugin's `.mcp.json`) with four read-only tools: `list_chats` lists Codex and Claude Code chats, `search_chats` runs a full-text search over rollouts and transcripts, `read_chat` reads one chat as compact items, and `list_running` lists live codex-fable jobs across workspaces. It implements JSON-RPC by hand, adds no runtime dependencies, and never starts a Codex turn.
+- Every output is bounded (4000 characters by default, 20000 at most) and returns a truncation notice and a cursor where paging applies. Snippets have their secrets redacted. The server accepts only ids and paths under the known roots, and it never reads auth or config files.
+- Codex reads go through a direct, short-lived `codex app-server`, never the shared broker. They fall back from `thread/items/list` to `thread/turns/list` and then to the rollout file.
+- The README documents how to register the same server for Codex agents in `~/.codex/config.toml`.
+
 ## 1.9.1 (fork)
 
 - Synced the internal `gpt-6-prompting` skill with the canonical codex-skills version (rewritten by Fable 5.1): operator experience is labelled, pre-launch brief checks are added, and the recipes no longer repeat the blocks.

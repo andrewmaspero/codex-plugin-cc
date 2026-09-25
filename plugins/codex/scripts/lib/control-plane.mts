@@ -123,7 +123,7 @@ function formatTimestamp(value) {
   return new Date(ms).toISOString();
 }
 
-function isMethodUnavailableError(error) {
+export function isMethodUnavailableError(error) {
   const message = String(error?.message ?? "");
   return (
     error?.rpcCode === -32601 ||
@@ -497,7 +497,7 @@ function extractUserText(item) {
   return item.text ?? "";
 }
 
-function compactItem(item, textLimit = 400) {
+export function compactItem(item, textLimit = 400) {
   const base = { type: item.type, id: item.id ?? null };
   switch (item.type) {
     case "userMessage":
