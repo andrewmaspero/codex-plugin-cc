@@ -1,6 +1,6 @@
 ---
 description: Delegate investigation, an explicit fix request, or follow-up rescue work to the Codex rescue subagent
-argument-hint: "[--background|--wait] [--resume|--fresh] [--write|--full|--sandbox <mode>] [--worktree|--worktree-name <name>] [--goal <objective>|--goal-file <path>] [--model <model|astra|sol|luna|sol-5.6|terra|luna-5.6|spark>] [--effort <none|minimal|low|medium|high>] [what Codex should investigate, solve, or continue]"
+argument-hint: "[--background|--wait] [--resume|--fresh] [--write|--full|--sandbox <mode>] [--worktree|--worktree-name <name>] [--goal <objective>|--goal-file <path>] [--model <luna|sol|astra>] [--effort <none|low|medium|high>] [what Codex should investigate, solve, or continue]"
 allowed-tools: Bash(node:*), AskUserQuestion, Agent
 ---
 
@@ -56,8 +56,8 @@ CODEX_TASK_EOF
 - Do not ask the subagent to inspect files, monitor progress, poll `/codex:status`, fetch `/codex:result`, call `/codex:cancel`, summarize output, or do follow-up work of its own.
 - Leave `--effort` unset unless the user explicitly asks for a specific reasoning effort.
 - Leave the model unset unless the user explicitly asks for one. A fresh task defaults to `gpt-6-sol`; `--resume` keeps the existing thread's model. `CODEX_COMPANION_DEFAULT_MODEL` can override the fresh-task default.
-- Model aliases: `astra` maps to `gpt-6-astra` (frontier, expensive; use sparingly; effort at most `medium`), `sol` maps to `gpt-6-sol` (default workhorse for coding and reviews), and `luna` maps to `gpt-6-luna` (near-free, fast; strong for bulk, vision, research, and strictly specified coding; supports effort `none`). Legacy aliases: `sol-5.6` maps to `gpt-5.6-sol`, `terra` to `gpt-5.6-terra`, `luna-5.6` to `gpt-5.6-luna`, and `spark` to `gpt-5.3-codex-spark`.
-- Accepted effort values are `none`, `minimal`, `low`, `medium`, and `high`. The general policy ceiling is `high`; `gpt-6-astra` accepts only `low` or `medium` and receives `medium` explicitly when no effort is given.
+- Model aliases: `astra` maps to `gpt-6-astra` (frontier, expensive; use sparingly; effort at most `medium`), `sol` maps to `gpt-6-sol` (default workhorse for coding and reviews), and `luna` maps to `gpt-6-luna` (near-free, fast; strong for bulk, vision, research, and strictly specified coding; supports effort `none`). Only these three models are supported.
+- Accepted effort values are `none`, `low`, `medium`, and `high`. The general policy ceiling is `high`; `gpt-6-astra` accepts only `low` or `medium` and receives `medium` explicitly when no effort is given.
 - Leave `--resume` and `--fresh` in the forwarded request. The subagent handles that routing when it builds the `task` command.
 - If the helper reports that Codex is missing or unauthenticated, stop and tell the user to run `/codex:setup`.
 - If the user did not supply a request, ask what Codex should investigate or fix.

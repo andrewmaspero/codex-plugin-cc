@@ -793,15 +793,38 @@ test("task forwards model selection and reasoning effort to app-server turn/star
   run("git", ["add", "README.md"], { cwd: repo });
   run("git", ["commit", "-m", "init"], { cwd: repo });
 
-  const result = run("node", [SCRIPT, "task", "--model", "spark", "--effort", "low", "diagnose the failing test"], {
+  const result = run("node", [SCRIPT, "task", "--model", "luna", "--effort", "low", "diagnose the failing test"], {
     cwd: repo,
     env: buildEnv(binDir)
   });
 
   assert.equal(result.status, 0, result.stderr);
   const fakeState = JSON.parse(fs.readFileSync(statePath, "utf8"));
-  assert.equal(fakeState.lastTurnStart.model, "gpt-5.3-codex-spark");
+  assert.equal(fakeState.lastTurnStart.model, "gpt-6-luna");
   assert.equal(fakeState.lastTurnStart.effort, "low");
+});
+
+test("task rejects every non-GPT-6 model before launch", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  const statePath = path.join(binDir, "fake-codex-state.json");
+  installFakeCodex(binDir);
+  initGitRepo(repo);
+  const env = buildEnv(binDir);
+
+  for (const model of ["spark", "terra", "sol-5.6", "luna-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.3-codex-spark", "gpt-5.5", "gpt-5.4"]) {
+    const result = run("node", [SCRIPT, "task", "--model", model, "diagnose"], { cwd: repo, env });
+    assert.notEqual(result.status, 0, `model ${model} should be rejected`);
+    assert.match(result.stderr, /Unsupported model ".+"\. Use luna, sol, or astra \(gpt-6-luna, gpt-6-sol, gpt-6-astra\)\./);
+    assert.equal(fs.existsSync(statePath), false);
+  }
+
+  const envOverride = run("node", [SCRIPT, "task", "diagnose"], {
+    cwd: repo,
+    env: { ...env, CODEX_COMPANION_DEFAULT_MODEL: "terra" }
+  });
+  assert.notEqual(envOverride.status, 0);
+  assert.match(envOverride.stderr, /Unsupported model "terra"/);
 });
 
 test("fresh tasks and reviews default to sol, while continued threads keep their model", () => {
@@ -858,7 +881,7 @@ test("fresh tasks and reviews default to sol, while continued threads keep their
   assert.equal(jobs[0].model, "gpt-6-luna");
 });
 
-test("task maps every GPT-6 and legacy model alias and caps reasoning effort at high", () => {
+test("task maps GPT-6 aliases and slugs and caps reasoning effort at high", () => {
   const repo = makeTempDir();
   const binDir = makeTempDir();
   const statePath = path.join(binDir, "fake-codex-state.json");
@@ -872,10 +895,9 @@ test("task maps every GPT-6 and legacy model alias and caps reasoning effort at 
     { alias: "astra", slug: "gpt-6-astra", effort: "medium" },
     { alias: "sol", slug: "gpt-6-sol", effort: "high" },
     { alias: "luna", slug: "gpt-6-luna", effort: "none" },
-    { alias: "sol-5.6", slug: "gpt-5.6-sol", effort: "high" },
-    { alias: "terra", slug: "gpt-5.6-terra", effort: "medium" },
-    { alias: "luna-5.6", slug: "gpt-5.6-luna", effort: "low" },
-    { alias: "spark", slug: "gpt-5.3-codex-spark", effort: "low" }
+    { alias: "gpt-6-sol", slug: "gpt-6-sol", effort: "low" },
+    { alias: "GPT-6-Luna", slug: "gpt-6-luna", effort: "medium" },
+    { alias: "gpt-6-astra", slug: "gpt-6-astra", effort: "low" }
   ];
   for (const { alias, slug, effort } of cases) {
     const result = run("node", [SCRIPT, "task", "--model", alias, "--effort", effort, "diagnose the failing test"], {
@@ -888,7 +910,7 @@ test("task maps every GPT-6 and legacy model alias and caps reasoning effort at 
     assert.equal(fakeState.lastTurnStart.effort, effort);
   }
 
-  for (const effort of ["xhigh", "max", "ultra", "hyper"]) {
+  for (const effort of ["minimal", "xhigh", "max", "ultra", "hyper"]) {
     const rejected = run("node", [SCRIPT, "task", "--model", "sol", "--effort", effort, "diagnose"], {
       cwd: repo,
       env: buildEnv(binDir)
@@ -898,19 +920,19 @@ test("task maps every GPT-6 and legacy model alias and caps reasoning effort at 
   }
 });
 
-test("astra effort policy rejects high, none, and minimal before launch", () => {
+test("astra effort policy rejects high and none before launch", () => {
   const repo = makeTempDir();
   const binDir = makeTempDir();
   const statePath = path.join(binDir, "fake-codex-state.json");
   installFakeCodex(binDir);
   initGitRepo(repo);
   const env = buildEnv(binDir);
-  for (const effort of ["high", "none", "minimal"]) {
+  for (const effort of ["high", "none"]) {
     const result = run("node", [SCRIPT, "task", "--model", "astra", "--effort", effort, "diagnose"], { cwd: repo, env });
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, effort === "high"
       ? /gpt-6-astra is capped at --effort medium by policy \(cost\)\. Use --effort medium or lower, or pick sol\./
-      : /gpt-6-astra does not support --effort none\/minimal; use low or medium\./);
+      : /gpt-6-astra does not support --effort none; use low or medium\./);
     assert.equal(fs.existsSync(statePath), false);
   }
   for (const [effort, expected] of [[null, "medium"], ["low", "low"]]) {

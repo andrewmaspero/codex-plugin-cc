@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.9.0 (fork)
+
+GPT-6 only.
+
+- Removed every non-GPT-6 model. `--model` (and `CODEX_COMPANION_DEFAULT_MODEL`) accept only `luna`, `sol`, `astra` or `gpt-6-luna`, `gpt-6-sol`, `gpt-6-astra`; anything else, including the retired 5.x Sol/Terra/Luna and Spark models, is rejected before launch.
+- Removed the `minimal` reasoning effort (a 5.x setting). Accepted efforts are `none`, `low`, `medium`, `high`; Astra still accepts only `low` or `medium`.
+- The read-side reconciler clears a worker pid it has confirmed dead when it finalizes a job, so a recycled pid can no longer make that record look alive and block broker teardown.
+
 ## 1.8.0 (fork)
 
 GPT-6 model family and runtime reliability.

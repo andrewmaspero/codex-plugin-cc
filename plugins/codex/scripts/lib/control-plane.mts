@@ -925,6 +925,10 @@ function finalizeReconciledJob(workspaceRoot, job, latestTurn, status, lastAgent
   const patch = {
     status: jobStatus,
     phase: jobStatus === "completed" ? "done" : "failed",
+    // Only reached once the worker pid is confirmed dead (checked again under
+    // the state lock below), so clear it: a recycled pid must not later make
+    // this record look alive and block broker teardown.
+    pid: null,
     completedAt,
     reconciledBy: "read-reconciler",
     turnReconcileProbe: null,
