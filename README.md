@@ -176,8 +176,8 @@ Ask Codex to redesign the database connection to be more resilient.
 **Notes:**
 
 - Fresh tasks and reviews default to `gpt-6-sol`; set `CODEX_COMPANION_DEFAULT_MODEL` to an alias or model name to override it. A follow-up (`continue` or `task --resume-last`) keeps its thread's model unless you pass `--model`.
-- GPT-6 aliases: `astra` → `gpt-6-astra` (frontier, expensive; use sparingly; effort `low` or `medium` only), `sol` → `gpt-6-sol` (default workhorse for coding and reviews), `luna` → `gpt-6-luna` (near-free, fast; strong for bulk, vision, research, and strictly specified coding; supports effort `none`). Legacy aliases: `sol-5.6` → `gpt-5.6-sol`, `terra` → `gpt-5.6-terra`, `luna-5.6` → `gpt-5.6-luna`, `spark` → `gpt-5.3-codex-spark`.
-- Accepted `--effort` values: `none`, `minimal`, `low`, `medium`, `high`. The general policy ceiling is `high`; `gpt-6-astra` accepts only `low` or `medium` and uses `medium` when effort is omitted.
+- Models: GPT-6 only. `luna` → `gpt-6-luna` (near-free, fast; bulk, vision, research, strictly specified coding; supports effort `none`), `sol` → `gpt-6-sol` (default workhorse for coding and reviews), `astra` → `gpt-6-astra` (frontier, expensive; use sparingly; effort `low` or `medium` only). Any other model is rejected.
+- Accepted `--effort` values: `none`, `low`, `medium`, `high`. The general policy ceiling is `high`; `gpt-6-astra` accepts only `low` or `medium` and uses `medium` when effort is omitted.
 - follow-up rescue requests can continue the latest Codex task in the repo
 
 ### `/codex:transfer`

@@ -20,7 +20,7 @@ Execution rules:
 - That prompt drafting is the only Claude-side work allowed. Do not inspect the repo, solve the task yourself, or add independent analysis outside the forwarded prompt text.
 - Leave `--effort` unset unless the user explicitly requests a specific effort.
 - Leave model unset by default. Add `--model` only when the user explicitly asks for one. Fresh tasks default to `gpt-6-sol` (or `CODEX_COMPANION_DEFAULT_MODEL`); resumed tasks keep their thread's model.
-- Map model aliases: `astra` to `--model gpt-6-astra`, `sol` to `--model gpt-6-sol`, `luna` to `--model gpt-6-luna`; legacy aliases: `sol-5.6` to `--model gpt-5.6-sol`, `terra` to `--model gpt-5.6-terra`, `luna-5.6` to `--model gpt-5.6-luna`, `spark` to `--model gpt-5.3-codex-spark`.
+- Models: GPT-6 only. Map `luna` to `--model gpt-6-luna`, `sol` to `--model gpt-6-sol`, `astra` to `--model gpt-6-astra`. Any other model name is rejected by the runtime.
 - `astra` is frontier and expensive: use sparingly, at effort `low` or `medium` only. With no `--effort`, the runtime sends `medium` for astra. `sol` is the default workhorse for coding and reviews. `luna` is near-free and fast, strong for bulk, vision, research, and strictly specified coding; it supports effort `none`.
 - Sandbox: forward `--write`, `--full`, `--sandbox <mode>`, `--worktree`, and `--worktree-name <name>` when present; strip them from the task text. If the user passed no sandbox control, add NOTHING — the workspace's configured default sandbox (set with `/codex:setup --sandbox`) applies, and adding `--write` would silently downgrade a workspace configured for full access. Only add `--write` when the task clearly requires edits AND the workspace has no configured default (setup report shows `default sandbox: read-only`).
 - Forward `--goal <objective>` and `--goal-budget <tokens>` when present; strip them from the task text.
@@ -28,13 +28,13 @@ Execution rules:
 Command selection:
 - Use exactly one `task` invocation per rescue handoff.
 - If the forwarded request includes `--background` or `--wait`, treat that as Claude-side execution control only. Strip it before calling `task`, and do not treat it as part of the natural-language task text.
-- If the forwarded request includes `--model`, normalize aliases (`astra` to `gpt-6-astra`, `sol` to `gpt-6-sol`, `luna` to `gpt-6-luna`, `sol-5.6` to `gpt-5.6-sol`, `terra` to `gpt-5.6-terra`, `luna-5.6` to `gpt-5.6-luna`, `spark` to `gpt-5.3-codex-spark`) and pass it through to `task`.
+- If the forwarded request includes `--model`, normalize aliases (`luna` to `gpt-6-luna`, `sol` to `gpt-6-sol`, `astra` to `gpt-6-astra`) and pass it through to `task`.
 - If the forwarded request includes `--effort`, pass it through to `task`.
 - If the forwarded request includes `--resume`, strip that token from the task text and add `--resume-last`.
 - If the forwarded request includes `--fresh`, strip that token from the task text and do not add `--resume-last`.
 - `--resume`: always use `task --resume-last`, even if the request text is ambiguous.
 - `--fresh`: always use a fresh `task` run, even if the request sounds like a follow-up.
-- `--effort`: accepted values are `none`, `minimal`, `low`, `medium`, `high`. `high` is the general ceiling by policy; `gpt-6-astra` accepts only `low` or `medium`. Do not pass `xhigh`, `max`, or `ultra` even though newer models advertise them.
+- `--effort`: accepted values are `none`, `low`, `medium`, `high`. `high` is the general ceiling by policy; `gpt-6-astra` accepts only `low` or `medium`. Do not pass `xhigh`, `max`, or `ultra` even though the models advertise them.
 - `task --resume-last`: internal helper for "keep going", "resume", "apply the top fix", or "dig deeper" after a previous rescue run.
 
 Safety rules:

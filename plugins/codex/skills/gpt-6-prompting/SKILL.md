@@ -8,8 +8,8 @@ user-invocable: false
 
 # GPT-6 Prompting
 
-GPT-6 models are strong but differ from Claude and from GPT-5.6 in ways that
-silently break vague briefs. Write for a capable operator that follows the
+GPT-6 models are strong but differ from Claude in ways that silently break
+vague briefs. Write for a capable operator that follows the
 brief literally, is very sensitive to instruction files, and pauses to ask
 questions nobody will answer in a background job.
 
@@ -46,8 +46,8 @@ Claude reviewer). Judge the output, not the price.
 OpenAI documents these for GPT-6, with Astra as the main example; live runs
 confirmed them on Luna and Sol too. Re-evaluate when a model changes.
 
-1. **It asks instead of acting.** GPT-6 asks clarifying questions more than
-   GPT-5.6. In a background job the question just ends the turn. Always include
+1. **It asks instead of acting.** GPT-6 is prone to asking clarifying
+   questions. In a background job the question just ends the turn. Always include
    the `<autonomy>` block from [references/blocks.md](references/blocks.md): no
    questions, a BLOCKED report when a decision lacks evidence or permission,
    and a budget.

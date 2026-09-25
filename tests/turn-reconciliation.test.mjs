@@ -242,7 +242,7 @@ test("dead worker and stable interrupted turn reconcile only on a second sample"
       assert.equal(reconciled.length, 1);
       const failed = readJobs(repo).find((candidate) => candidate.id === jobId);
       assert.equal(failed.status, "failed");
-      assert.equal(failed.pid, workerPid, "reconciliation must retain the recorded pid");
+      assert.equal(failed.pid, null, "a confirmed-dead worker pid is cleared so pid reuse cannot resurrect the job");
     } finally {
       process.env.PATH = previousPath;
     }

@@ -122,17 +122,18 @@ const WAIT_REAP_INTERVAL_MS = 5000;
 // Alive-but-hung workers pass pid checks, so waiters also reconcile against
 // the thread's latest turn state (bounded to one app-server query per window).
 const WAIT_TURN_RECONCILE_INTERVAL_MS = 30000;
-const VALID_REASONING_EFFORTS = new Set(["none", "minimal", "low", "medium", "high"]);
+// GPT-6 only. `high` is the policy ceiling for every model (cost), even though
+// the models themselves accept xhigh/max.
+const VALID_REASONING_EFFORTS = new Set(["none", "low", "medium", "high"]);
 const DEFAULT_TASK_MODEL = "gpt-6-sol";
+// The only supported models. Older families (5.x Sol/Terra/Luna, Spark) are
+// retired and rejected rather than passed through.
 const MODEL_ALIASES = new Map([
-  ["astra", "gpt-6-astra"],
-  ["sol", "gpt-6-sol"],
   ["luna", "gpt-6-luna"],
-  ["sol-5.6", "gpt-5.6-sol"],
-  ["terra", "gpt-5.6-terra"],
-  ["luna-5.6", "gpt-5.6-luna"],
-  ["spark", "gpt-5.3-codex-spark"]
+  ["sol", "gpt-6-sol"],
+  ["astra", "gpt-6-astra"]
 ]);
+const SUPPORTED_MODELS = new Set(MODEL_ALIASES.values());
 const MIN_NODE_VERSION = { major: 22, minor: 18, patch: 0 };
 const MIN_NODE_VERSION_LABEL = "22.18.0";
 const SANDBOX_ALIASES = new Map([
@@ -200,7 +201,7 @@ function printUsage() {
       "  node scripts/codex-companion.mts setup [--enable-review-gate|--disable-review-gate] [--sandbox <read-only|write|full|clear>] [--statusline] [--json]",
       "  node scripts/codex-companion.mts review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>]",
       "  node scripts/codex-companion.mts adversarial-review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [focus text]",
-      "  node scripts/codex-companion.mts task [--background] [--write|--full|--sandbox <mode>] [--worktree|--worktree-name <name>] [--goal <objective>] [--goal-budget <tokens>] [--resume-last|--resume|--fresh] [--model <astra|sol|luna|sol-5.6|terra|luna-5.6|spark|model>] [--effort <none|minimal|low|medium|high>] [prompt]",
+      "  node scripts/codex-companion.mts task [--background] [--write|--full|--sandbox <mode>] [--worktree|--worktree-name <name>] [--goal <objective>] [--goal-budget <tokens>] [--resume-last|--resume|--fresh] [--model <luna|sol|astra>] [--effort <none|low|medium|high>] [prompt]",
       "  node scripts/codex-companion.mts transfer [--source <claude-jsonl>] [--json]",
       "  node scripts/codex-companion.mts status [job-id] [--all] [--wait] [--timeout-ms <ms, 0 = until done>] [--poll-interval-ms <ms>] [--json]",
       "  node scripts/codex-companion.mts wait <job-id> [--timeout <seconds>]",
@@ -215,7 +216,7 @@ function printUsage() {
       "  node scripts/codex-companion.mts alerts [job-id] [--stall-seconds <n>] [--no-goals] [--json]",
       "  node scripts/codex-companion.mts goal <set|show|clear> [job-id|thread-id] [--budget <tokens>] [--status <status>] [-- <objective>]",
       "  node scripts/codex-companion.mts artifacts [job-id] [--limit <n>] [--json]",
-      "  node scripts/codex-companion.mts continue <thread-id> [--background] [--write|--full|--sandbox <mode>] [--worktree|--worktree-name <name>] [--goal <objective>] [--goal-budget <tokens>] [--model <astra|sol|luna|sol-5.6|terra|luna-5.6|spark|model>] [--effort <none|minimal|low|medium|high>] [prompt]",
+      "  node scripts/codex-companion.mts continue <thread-id> [--background] [--write|--full|--sandbox <mode>] [--worktree|--worktree-name <name>] [--goal <objective>] [--goal-budget <tokens>] [--model <luna|sol|astra>] [--effort <none|low|medium|high>] [prompt]",
       "  node scripts/codex-companion.mts worktrees [--prune] [--json]"
     ].join("\n")
   );
@@ -288,7 +289,14 @@ function normalizeRequestedModel(model) {
   if (!normalized) {
     return null;
   }
-  return MODEL_ALIASES.get(normalized.toLowerCase()) ?? normalized;
+  const lowered = normalized.toLowerCase();
+  const resolved = MODEL_ALIASES.get(lowered) ?? lowered;
+  if (!SUPPORTED_MODELS.has(resolved)) {
+    throw new Error(
+      `Unsupported model "${model}". Use luna, sol, or astra (gpt-6-luna, gpt-6-sol, gpt-6-astra).`
+    );
+  }
+  return resolved;
 }
 
 function resolveFreshTaskModel(model) {
@@ -342,7 +350,7 @@ function normalizeReasoningEffort(effort) {
   }
   if (!VALID_REASONING_EFFORTS.has(normalized)) {
     throw new Error(
-      `Unsupported reasoning effort "${effort}". Use one of: none, minimal, low, medium, high.`
+      `Unsupported reasoning effort "${effort}". Use one of: none, low, medium, high.`
     );
   }
   return normalized;
@@ -355,8 +363,8 @@ function resolveModelEffort(model, effort) {
   if (effort === "high") {
     throw new Error("gpt-6-astra is capped at --effort medium by policy (cost). Use --effort medium or lower, or pick sol.");
   }
-  if (effort === "none" || effort === "minimal") {
-    throw new Error("gpt-6-astra does not support --effort none/minimal; use low or medium.");
+  if (effort === "none") {
+    throw new Error("gpt-6-astra does not support --effort none; use low or medium.");
   }
   return effort ?? "medium";
 }

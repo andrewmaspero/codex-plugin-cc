@@ -6,7 +6,7 @@ allowed-tools: Read, Glob, Grep, Bash(node:*), Bash(git:*), AskUserQuestion
 ---
 
 Run an adversarial Codex review through the shared plugin runtime.
-The default model is `gpt-6-sol`, the workhorse for coding and reviews; `CODEX_COMPANION_DEFAULT_MODEL` can override it. `gpt-6-astra` is frontier and expensive, so use it sparingly; it accepts effort `low` or `medium` only. `gpt-6-luna` is near-free and fast, strong for bulk, vision, research, and strictly specified coding, and supports effort `none`. Accepted effort values are `none`, `minimal`, `low`, `medium`, and `high` (general policy ceiling).
+The default model is `gpt-6-sol`, the workhorse for coding and reviews; `CODEX_COMPANION_DEFAULT_MODEL` can override it. `gpt-6-astra` is frontier and expensive, so use it sparingly; it accepts effort `low` or `medium` only. `gpt-6-luna` is near-free and fast, strong for bulk, vision, research, and strictly specified coding, and supports effort `none`. Accepted effort values are `none`, `low`, `medium`, and `high` (general policy ceiling). Only GPT-6 models are supported.
 Position it as a challenge review that questions the chosen implementation, design choices, tradeoffs, and assumptions.
 It is not just a stricter pass over implementation defects.
 
