@@ -8,6 +8,7 @@ GPT-6 model family and runtime reliability.
 - Limited `gpt-6-astra` to `low` or `medium` effort and pinned its default effort to `medium`.
 - Fixed background worker startup ordering, broker retry thread reuse, and web-search progress details.
 - Prevented read-side reconciliation from finalizing live workers, confirmed stalled interrupted turns across two samples, and protected their brokers during session teardown.
+- Replaced the internal `gpt-5-4-prompting` skill with `gpt-6-prompting`: GPT-6 brief blocks (autonomy, repo policy, verification states, progress updates, output contracts) and per-model recipes for Luna, Sol, and Astra.
 
 ## 1.7.0 (fork)
 
