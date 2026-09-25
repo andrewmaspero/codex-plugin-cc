@@ -87,8 +87,14 @@ export interface ThreadItemsListParams {
   sortDirection?: "asc" | "desc" | null;
 }
 
+export interface ThreadItemEntry {
+  /** Turn containing this item. */
+  turnId: string;
+  item: ThreadItem;
+}
+
 export interface ThreadItemsListResponse {
-  data: ThreadItem[];
+  data: ThreadItemEntry[];
   nextCursor: string | null;
   backwardsCursor: string | null;
 }

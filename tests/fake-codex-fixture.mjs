@@ -53,10 +53,13 @@ function buildThread(thread) {
     cwd: thread.cwd,
     cliVersion: "fake-codex",
     source: "appServer",
-    agentNickname: null,
+    agentNickname: thread.agentNickname || null,
     agentRole: null,
     gitInfo: null,
     name: thread.name || null,
+    model: thread.model || null,
+    reasoningEffort: thread.reasoningEffort || null,
+    parentThreadId: thread.parentThreadId || null,
     turns: []
   };
 }
@@ -348,10 +351,22 @@ rl.on("line", (line) => {
         if (message.params.cwd) {
           threads = threads.filter((thread) => thread.cwd === message.params.cwd);
         }
+        if (Array.isArray(message.params.sourceKinds) && message.params.sourceKinds.length > 0) {
+          threads = threads.filter((thread) => message.params.sourceKinds.includes(thread.parentThreadId ? "subAgentThreadSpawn" : "appServer"));
+        }
         if (message.params.searchTerm) {
-          threads = threads.filter((thread) => (thread.name || "").includes(message.params.searchTerm));
+          threads = threads.filter((thread) => (thread.name || "").includes(message.params.searchTerm) || (thread.preview || "").includes(message.params.searchTerm));
         }
         threads.sort((left, right) => right.updatedAt - left.updatedAt);
+        state.lastThreadList = message.params;
+        saveState(state);
+        if (message.params.limit) {
+          const offset = message.params.cursor ? Number(JSON.parse(message.params.cursor).offset) : 0;
+          const page = threads.slice(offset, offset + message.params.limit);
+          const nextOffset = offset + page.length;
+          send({ id: message.id, result: { data: page.map(buildThread), nextCursor: nextOffset < threads.length ? JSON.stringify({ offset: nextOffset }) : null } });
+          break;
+        }
         send({ id: message.id, result: { data: threads.map(buildThread), nextCursor: null } });
         break;
       }
@@ -752,6 +767,39 @@ rl.on("line", (line) => {
 	          result.turns = (thread.turns || []).slice();
 	        }
 	        send({ id: message.id, result: { thread: result } });
+	        break;
+	      }
+
+	      case "thread/items/list": {
+	        if (BEHAVIOR === "legacy-thread-read" || BEHAVIOR === "no-items-list") {
+	          send({ id: message.id, error: { code: -32600, message: "Invalid request: unknown variant thread/items/list" } });
+	          break;
+	        }
+	        const thread = ensureThread(state, message.params.threadId);
+	        let entries = [];
+	        for (const turn of thread.turns || []) {
+	          if (message.params.turnId && turn.id !== message.params.turnId) {
+	            continue;
+	          }
+	          for (const item of turn.items || []) {
+	            entries.push({ turnId: turn.id, item });
+	          }
+	        }
+	        if (message.params.sortDirection === "desc") {
+	          entries.reverse();
+	        }
+	        const offset = message.params.cursor ? Number(JSON.parse(message.params.cursor).offset) : 0;
+	        const limit = message.params.limit || entries.length;
+	        const page = entries.slice(offset, offset + limit);
+	        const nextOffset = offset + page.length;
+	        send({
+	          id: message.id,
+	          result: {
+	            data: page,
+	            nextCursor: nextOffset < entries.length ? JSON.stringify({ offset: nextOffset }) : null,
+	            backwardsCursor: null
+	          }
+	        });
 	        break;
 	      }
 
