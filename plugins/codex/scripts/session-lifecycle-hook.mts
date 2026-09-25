@@ -3,10 +3,11 @@
 import fs from "node:fs";
 import process from "node:process";
 
-import { terminateProcessTree } from "./lib/process.mts";
+import { isProcessAlive, terminateProcessTree } from "./lib/process.mts";
 import { BROKER_ENDPOINT_ENV } from "./lib/app-server.mts";
 import {
   clearBrokerSession,
+  hasLiveBrokerJob,
   LOG_FILE_ENV,
   loadBrokerSession,
   PID_FILE_ENV,
@@ -56,19 +57,19 @@ function emitAdditionalContext(eventName, context) {
 
 async function cleanupSessionJobs(cwd, sessionId) {
   if (!cwd || !sessionId) {
-    return;
+    return false;
   }
 
   const workspaceRoot = resolveWorkspaceRoot(cwd);
   const stateFile = resolveStateFile(workspaceRoot);
   if (!fs.existsSync(stateFile)) {
-    return;
+    return false;
   }
 
   const state = loadState(workspaceRoot);
   const removedJobs = state.jobs.filter((job) => job.sessionId === sessionId);
   if (removedJobs.length === 0) {
-    return;
+    return false;
   }
 
   for (const job of removedJobs) {
@@ -81,12 +82,18 @@ async function cleanupSessionJobs(cwd, sessionId) {
     } catch {
       // Ignore teardown failures during session shutdown.
     }
-    if (job.brokerTransport === "dedicated" && typeof job.brokerEndpoint === "string") {
+    // Let a signalled worker actually exit before considering its broker
+    // unused; a reconciled terminal record may still have a live worker too.
+    for (let attempt = 0; attempt < 10 && isProcessAlive(job.pid) === true; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    if (job.brokerTransport === "dedicated" && typeof job.brokerEndpoint === "string" &&
+      !hasLiveBrokerJob(workspaceRoot, job.runCwd ?? cwd, job.brokerEndpoint)) {
       await sendBrokerShutdown(job.brokerEndpoint).catch(() => {});
     }
     if (job.worktree && typeof job.runCwd === "string") {
       const worktreeBroker = loadBrokerSession(job.runCwd);
-      if (worktreeBroker) {
+      if (worktreeBroker && !hasLiveBrokerJob(workspaceRoot, job.runCwd, worktreeBroker.endpoint)) {
         await sendBrokerShutdown(worktreeBroker.endpoint).catch(() => {});
         teardownBrokerSession({ ...worktreeBroker, killProcess: terminateProcessTree });
         clearBrokerSession(job.runCwd);
@@ -97,8 +104,12 @@ async function cleanupSessionJobs(cwd, sessionId) {
   // updateState is lock-serialized, so a concurrent worker upsert from
   // another live session cannot be lost by this rewrite.
   updateState(workspaceRoot, (nextState) => {
-    nextState.jobs = nextState.jobs.filter((job) => job.sessionId !== sessionId);
+    nextState.jobs = nextState.jobs.filter((job) =>
+      job.sessionId !== sessionId ||
+      ((job.status !== "running" && job.status !== "queued") && isProcessAlive(job.pid) === true)
+    );
   });
+  return removedJobs.some((job) => isProcessAlive(job.pid) === true);
 }
 
 function handleSessionStart(input) {
@@ -114,7 +125,10 @@ function handleSessionStart(input) {
 
 async function handleSessionEnd(input) {
   const cwd = input.cwd || process.cwd();
-  await cleanupSessionJobs(cwd, input.session_id || process.env[SESSION_ID_ENV]);
+  const workerStillAlive = await cleanupSessionJobs(cwd, input.session_id || process.env[SESSION_ID_ENV]);
+  if (workerStillAlive) {
+    return;
+  }
 
   // The broker is workspace-scoped, not Claude-session-scoped. Ending one
   // session must not tear it out from under another session's live worker.
@@ -122,7 +136,7 @@ async function handleSessionEnd(input) {
   // any remaining workspace job is active.
   const workspaceRoot = resolveWorkspaceRoot(cwd);
   const hasOtherActiveJobs = loadState(workspaceRoot).jobs.some(
-    (job) => job.status === "queued" || job.status === "running"
+    (job) => job.status === "queued" || job.status === "running" || isProcessAlive(job.pid) === true
   );
   if (hasOtherActiveJobs) {
     return;
@@ -144,6 +158,10 @@ async function handleSessionEnd(input) {
   const logFile = brokerSession?.logFile ?? null;
   const sessionDir = brokerSession?.sessionDir ?? null;
   const pid = brokerSession?.pid ?? null;
+
+  if (hasLiveBrokerJob(workspaceRoot, cwd, brokerEndpoint)) {
+    return;
+  }
 
   if (brokerEndpoint) {
     await sendBrokerShutdown(brokerEndpoint);

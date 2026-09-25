@@ -16,6 +16,9 @@ import { fileURLToPath } from "node:url";
 import { buildEnv, installFakeCodex } from "./fake-codex-fixture.mjs";
 import { initGitRepo, makeTempDir, run } from "./helpers.mjs";
 import { CodexAppServerClient } from "../plugins/codex/scripts/lib/app-server.mts";
+import { loadBrokerSession } from "../plugins/codex/scripts/lib/broker-lifecycle.mts";
+import { teardownWorkspaceBrokerSession } from "../plugins/codex/scripts/lib/codex.mts";
+import { reconcileCompletedTurnJobs } from "../plugins/codex/scripts/lib/control-plane.mts";
 import { resolveStateDir, upsertJob, writeJobFile } from "../plugins/codex/scripts/lib/state.mts";
 import { runTrackedJob } from "../plugins/codex/scripts/lib/tracked-jobs.mts";
 
@@ -115,7 +118,7 @@ test("worker reconciles a silently completed turn from thread state", async () =
   }
 });
 
-test("status and alerts finalize a hung job whose turn already completed (completed-but-unreconciled)", async () => {
+test("status and alerts retain a completed turn while its worker is alive", async () => {
   const repo = makeRepo();
   const binDir = makeTempDir();
   installFakeCodex(binDir, "no-turn-events");
@@ -143,22 +146,9 @@ test("status and alerts finalize a hung job whose turn already completed (comple
 
     const alerts = run("node", [SCRIPT, "alerts", jobId, "--json", "--no-goals"], { cwd: repo, env });
     assert.equal(alerts.status, 0, alerts.stderr);
-    const payload = JSON.parse(alerts.stdout);
-    const kinds = payload.alerts.map((alert) => alert.kind);
-    assert.ok(
-      kinds.includes("completed-but-unreconciled"),
-      `expected completed-but-unreconciled alert, got: ${kinds.join(", ") || "none"}`
-    );
-
     const job = readJobs(repo).find((candidate) => candidate.id === jobId);
-    assert.equal(job.status, "completed", `job should be finalized inline: ${JSON.stringify(job)}`);
-    assert.equal(job.reconciledBy, "read-reconciler");
-    const log = fs.readFileSync(job.logFile, "utf8");
-    assert.match(log, /finalized by read-side reconciliation/, "log has no read-reconciliation line");
-
-    const result = run("node", [SCRIPT, "result", jobId, "--json"], { cwd: repo, env });
-    assert.equal(result.status, 0, result.stderr);
-    assert.match(String(JSON.parse(result.stdout).storedJob?.result?.rawOutput ?? ""), /Handled the requested task/);
+    assert.equal(job.status, "running");
+    assert.equal(job.pid, workerPid);
   } finally {
     killPid(workerPid);
     endSession(repo, env);
@@ -190,6 +180,72 @@ test("read-side reconciliation never fails an interrupted turn while its worker 
     const after = readJobs(repo).find((candidate) => candidate.id === jobId);
     assert.equal(after.status, "running", `live interrupted worker was falsely finalized: ${JSON.stringify(after)}`);
     assert.equal(after.pid, workerPid);
+    const broker = loadBrokerSession(repo);
+    assert.ok(broker?.pid);
+    assert.equal(await teardownWorkspaceBrokerSession(repo), false, "teardown must retain a live worker's broker");
+    assert.ok(loadBrokerSession(repo));
+    assert.doesNotThrow(() => process.kill(broker.pid, 0));
+  } finally {
+    killPid(workerPid);
+    endSession(repo, env);
+  }
+});
+
+test("dead worker and stable interrupted turn reconcile only on a second sample", async () => {
+  const repo = makeRepo();
+  const binDir = makeTempDir();
+  installFakeCodex(binDir, "interrupted-no-events");
+  const env = cleanEnv(binDir);
+  env.CODEX_COMPANION_IDLE_RECONCILE_MS = "0";
+  let workerPid = null;
+  try {
+    const launch = run("node", [SCRIPT, "task", "--background", "--json", "dead interrupted turn"], { cwd: repo, env });
+    assert.equal(launch.status, 0, launch.stderr);
+    const jobId = JSON.parse(launch.stdout).jobId;
+    const running = await waitFor(() => {
+      const job = readJobs(repo).find((candidate) => candidate.id === jobId);
+      return job?.status === "running" && job.threadId ? job : null;
+    });
+    await waitFor(() => {
+      const statePath = path.join(binDir, "fake-codex-state.json");
+      if (!fs.existsSync(statePath)) return false;
+      const state = JSON.parse(fs.readFileSync(statePath, "utf8"));
+      return state.threads?.some((thread) => thread.id === running.threadId && thread.turns?.some((turn) => turn.status === "interrupted"));
+    });
+    workerPid = running.pid;
+    killPid(workerPid);
+    await waitFor(() => {
+      try { process.kill(workerPid, 0); return false; } catch { return true; }
+    });
+    const previousPath = process.env.PATH;
+    process.env.PATH = env.PATH;
+    try {
+      const client = await CodexAppServerClient.connect(repo, { disableBroker: true });
+      try {
+        const turns = await client.request("thread/turns/list", { threadId: running.threadId, cursor: null, limit: 1, sortDirection: "desc", itemsView: "full" });
+        assert.equal(turns.data?.[0]?.status, "interrupted");
+      } finally {
+        await client.close();
+      }
+      const now = Date.now() + 6000;
+      assert.deepEqual(await reconcileCompletedTurnJobs(repo, [running], { now, quietMs: 400 }), []);
+      const sampled = readJobs(repo).find((candidate) => candidate.id === jobId);
+      assert.equal(sampled.status, "running");
+      assert.equal(sampled.turnReconcileProbe?.status, "interrupted");
+      assert.deepEqual(await reconcileCompletedTurnJobs(repo, [sampled], { now: now + 15_000, quietMs: 400 }), []);
+      assert.equal(readJobs(repo).find((candidate) => candidate.id === jobId)?.turnReconcileProbe?.observedAt, now);
+      fs.appendFileSync(sampled.logFile, "worker log advanced after the first sample\n");
+      assert.deepEqual(await reconcileCompletedTurnJobs(repo, [sampled], { now: now + 30_001, quietMs: 400 }), []);
+      const restarted = readJobs(repo).find((candidate) => candidate.id === jobId);
+      assert.ok(restarted.turnReconcileProbe.activityMs > sampled.turnReconcileProbe.activityMs);
+      const reconciled = await reconcileCompletedTurnJobs(repo, [restarted], { now: now + 60_002, quietMs: 400 });
+      assert.equal(reconciled.length, 1);
+      const failed = readJobs(repo).find((candidate) => candidate.id === jobId);
+      assert.equal(failed.status, "failed");
+      assert.equal(failed.pid, workerPid, "reconciliation must retain the recorded pid");
+    } finally {
+      process.env.PATH = previousPath;
+    }
   } finally {
     killPid(workerPid);
     endSession(repo, env);
@@ -198,26 +254,30 @@ test("read-side reconciliation never fails an interrupted turn while its worker 
 
 test("a real worker completion clears stale read-reconciler failure metadata", async () => {
   const repo = makeRepo();
+  const logFile = path.join(resolveStateDir(repo), "jobs", "task-reconciler-self-heal.log");
   const job = {
     id: "task-reconciler-self-heal",
     title: "Codex Task",
     workspaceRoot: repo,
-    status: "failed",
-    phase: "failed",
-    reconciledBy: "read-reconciler",
-    errorMessage: "transient interrupted turn",
+    status: "running",
+    phase: "starting",
+    logFile,
     threadId: "thr_self_heal"
   };
   writeJobFile(repo, job.id, job);
   upsertJob(repo, job);
 
-  await runTrackedJob(job, async () => ({
-    exitStatus: 0,
-    threadId: "thr_self_heal",
-    turnId: "turn_self_heal",
-    payload: { status: 0, rawOutput: "Actually completed." },
-    rendered: "Actually completed."
-  }));
+  await runTrackedJob(job, async () => {
+    writeJobFile(repo, job.id, { ...job, status: "failed", reconciledBy: "read-reconciler", errorMessage: "transient interrupted turn" });
+    upsertJob(repo, { id: job.id, status: "failed", reconciledBy: "read-reconciler", errorMessage: "transient interrupted turn" });
+    return {
+      exitStatus: 0,
+      threadId: "thr_self_heal",
+      turnId: "turn_self_heal",
+      payload: { status: 0, rawOutput: "Actually completed." },
+      rendered: "Actually completed."
+    };
+  }, { logFile });
 
   const stored = JSON.parse(fs.readFileSync(path.join(resolveStateDir(repo), "jobs", `${job.id}.json`), "utf8"));
   const stateJob = readJobs(repo).find((candidate) => candidate.id === job.id);
@@ -226,6 +286,8 @@ test("a real worker completion clears stale read-reconciler failure metadata", a
   assert.equal(stored.reconciledBy, null);
   assert.equal(stateJob.errorMessage, null);
   assert.equal(stateJob.reconciledBy, null);
+  assert.equal(stateJob.status, "completed");
+  assert.match(fs.readFileSync(logFile, "utf8"), /Worker completion replaced a read-side reconciler failure with completed/);
 });
 
 test("turn-complete hook finalizes a job the worker never closed, but leaves streaming jobs alone", async () => {

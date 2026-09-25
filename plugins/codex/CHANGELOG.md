@@ -7,6 +7,7 @@ GPT-6 model family and runtime reliability.
 - Added `astra`, `sol`, and `luna` aliases for GPT-6; retained `sol-5.6`, `terra`, `luna-5.6`, and `spark` as legacy aliases. Fresh tasks and reviews default to `gpt-6-sol`, with `CODEX_COMPANION_DEFAULT_MODEL` as an override.
 - Limited `gpt-6-astra` to `low` or `medium` effort and pinned its default effort to `medium`.
 - Fixed background worker startup ordering, broker retry thread reuse, and web-search progress details.
+- Prevented read-side reconciliation from finalizing live workers, confirmed stalled interrupted turns across two samples, and protected their brokers during session teardown.
 
 ## 1.7.0 (fork)
 
