@@ -9,9 +9,9 @@ user-invocable: false
 # GPT-6 Prompting
 
 GPT-6 models are strong but differ from Claude in ways that silently break
-vague briefs. Write for a capable operator that follows the
-brief literally, is very sensitive to instruction files, and pauses to ask
-questions nobody will answer in a background job.
+vague briefs. Write for a capable operator that follows the brief literally,
+is very sensitive to instruction files, and pauses to ask questions nobody
+will answer in a background job.
 
 Grounded in OpenAI's [GPT-6 model guidance](https://developers.openai.com/api/docs/guides/latest-model),
 the [Sol/Luna launch](https://openai.com/index/introducing-gpt-6-sol-and-luna/),
@@ -22,9 +22,9 @@ on 25 September 2026. Recheck the model guide when OpenAI ships a new release.
 
 | model | slug | list $ in/out per 1M | efforts | use it for |
 |---|---|---|---|---|
-| Luna | `gpt-6-luna` | 0.10 / 0.50 | none–max | Default for anything bulk or well-specified: research, lookups, codebase scans, bulk vision (screenshots, documents, image triage), data extraction, and strictly specified coding. Effectively free, so run many in parallel. |
-| Sol | `gpt-6-sol` | 2 / 10 | none–max | The workhorse: multi-file implementation, debugging, test/lint loops, reviews, and code that should be ready to merge. Thorough and checks its own work. |
-| Astra | `gpt-6-astra` | 10 / 50 | low–max (no `none`) | Rare and deliberate: architecture review or second opinion, an occasional end-to-end review, writing prompts for other models, complex computer use (for example redrawing a sketch in Figma), and 3D/CAD work. Priced like Fable 5.1. |
+| Luna | `gpt-6-luna` | 0.10 / 0.50 | none–high (plugin cap) | Default for anything bulk or well-specified: research, lookups, codebase scans, bulk vision (screenshots, documents, image triage), data extraction, and strictly specified coding. Effectively free, so run many in parallel. |
+| Sol | `gpt-6-sol` | 2 / 10 | none–high (plugin cap) | The workhorse: multi-file implementation, debugging, test/lint loops, reviews, and code that should be ready to merge. Thorough and checks its own work. |
+| Astra | `gpt-6-astra` | 10 / 50 | low–medium (policy) | Rare and deliberate: architecture review or second opinion, an occasional end-to-end review, writing prompts for other models, complex computer use (for example redrawing a sketch in Figma), and 3D/CAD work. Priced like Fable 5.1. |
 
 Effort:
 
@@ -43,8 +43,9 @@ Claude reviewer). Judge the output, not the price.
 
 ## The six GPT-6 behaviours every brief must handle
 
-OpenAI documents these for GPT-6, with Astra as the main example; live runs
-confirmed them on Luna and Sol too. Re-evaluate when a model changes.
+OpenAI documents these for GPT-6, mostly with Astra examples. Luna and Sol
+jobs briefed with these blocks behaved as intended on 25 September 2026, but
+each behaviour was not tested separately. Re-evaluate when a model changes.
 
 1. **It asks instead of acting.** GPT-6 is prone to asking clarifying
    questions. In a background job the question just ends the turn. Always include
@@ -59,8 +60,8 @@ confirmed them on Luna and Sol too. Re-evaluate when a model changes.
    instruction files.
 3. **It is literal, and Luna is the most literal.** It fills routine gaps, but
    consequential ones get guessed or skipped. Spell out the output shape, the
-   verification commands, what is out of scope, and the stop conditions. For Luna coding work, give exact files,
-   signatures, and acceptance tests. Luna codes well when the spec is strict and
+   verification commands, what is out of scope, and the stop conditions. For
+   Luna coding work, give exact files, signatures, and acceptance tests. Luna codes well when the spec is strict and
    drifts when it is loose.
 4. **It defaults to Markdown lists and tables.** If the output feeds a parser
    or another model, give an exact schema. If it feeds a human, say what length
@@ -94,8 +95,7 @@ full recipes per model live in [references/recipes.md](references/recipes.md).
 
 Always include `<progress_updates>` for background jobs. Codex runs GPT-6 at
 low verbosity by default (model catalog `default_verbosity: low`), so without
-the block the job log shows only commands. With it, every
-milestone lands as an "Assistant message" line that a controller's log monitor
+the block the job log shows only commands. With it, every milestone lands as an "Assistant message" line that a controller's log monitor
 turns into a live mini-update.
 
 ## Steering and goals
