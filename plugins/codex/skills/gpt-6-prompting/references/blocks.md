@@ -1,9 +1,19 @@
 # GPT-6 Prompt Blocks
 
-Copy the blocks a brief needs; drop the rest. Keep tag names stable so
-steering deltas can name them.
+Copy the blocks a brief needs and drop the rest. Keep the tag names, so a
+steering delta can say "amend `<verification>`" and the worker knows what it
+means. Each block opens with the behaviour it handles; the labels (OpenAI,
+Verified, Operator) are explained in `SKILL.md`.
 
-## autonomy (every background job)
+Required for every background job: `<autonomy>` and `<output_contract>`;
+`<repo_policy>` when it runs inside a repository; `<progress_updates>` when
+anyone will watch it.
+
+## autonomy
+
+Handles: asking instead of acting (OpenAI). In a background job the question
+ends the turn, so the block replaces questions with decision rules and a
+BLOCKED report.
 
 ```xml
 <autonomy>
@@ -17,7 +27,11 @@ Budget: stop after <time or attempt budget>, preserving progress.
 </autonomy>
 ```
 
-## repo_policy (every job that runs inside a repository)
+## repo_policy
+
+Handles: obeying instruction files (OpenAI). Repositories often carry
+automation rules ("push, open a PR, merge"), and the worker follows them
+unless the brief says otherwise.
 
 ```xml
 <repo_policy>
@@ -32,6 +46,9 @@ or delete branches unless listed. Preserve existing uncommitted edits.
 
 ## scope
 
+Handles: literal reading of the brief (Operator). Consequential gaps get
+guessed, so the allowed and forbidden surface is stated, not implied.
+
 ```xml
 <scope>
 Allowed: <paths or behaviour>.
@@ -41,6 +58,10 @@ No unrelated refactors, renames, or formatting churn.
 ```
 
 ## verification
+
+Handles: over-testing small changes (OpenAI). Names the checks, and says what
+not to test, so a one-line fix does not arrive with a test file that mirrors
+the implementation.
 
 ```xml
 <verification>
@@ -54,7 +75,11 @@ current edits; do not skip, weaken, or delete tests.
 </verification>
 ```
 
-## progress_updates (every background job)
+## progress_updates
+
+Handles: silence while working (Verified). Codex runs GPT-6 at low verbosity,
+so without this block the job log shows only commands. With it, each step
+produces a line that a log watcher can relay.
 
 ```xml
 <progress_updates>
@@ -67,6 +92,9 @@ seconds when execution permits. Keep these updates out of the final response.
 
 ## output_contract
 
+Handles: the Markdown-lists-and-tables default (OpenAI). Says who reads the
+final message and in what shape.
+
 ```xml
 <output_contract>
 These constraints apply only to the final response; progress goes in
@@ -77,10 +105,17 @@ the task, no closing offer.
 </output_contract>
 ```
 
-For machine-consumed output: "The final response is only a schema-valid JSON
-object matching <schema>."
+For machine-consumed output replace the body with: "The final response is
+only a schema-valid JSON object matching <schema>."
 
-## grounding (research, review, audit)
+For prose a person will read: "Write in plain paragraphs. Use a list only for
+genuinely parallel or sequential items. No stock phrases."
+
+## grounding
+
+Handles: confident unverified claims (Operator). GPT-6 states unverified
+numbers and names with the same confidence as verified ones unless told to
+mark them. For research, review, and audit jobs.
 
 ```xml
 <grounding>
@@ -90,7 +125,10 @@ names. Prefer primary sources (vendor docs, source code, release notes).
 </grounding>
 ```
 
-## delegation (large decomposable jobs on Sol or Astra)
+## delegation
+
+Handles: under-delegating (OpenAI). Only for large decomposable jobs on Sol
+or Astra.
 
 ```xml
 <delegation>
@@ -100,7 +138,11 @@ own scope and output contract. You own integration and final verification.
 </delegation>
 ```
 
-## vision (screenshots, documents, image triage)
+## vision
+
+Handles: inferring content that is not in the image (Operator). For
+screenshots, documents, and image triage. Names the fields per image so the
+worker reports what is there rather than what it expects.
 
 ```xml
 <vision>
@@ -110,7 +152,11 @@ image is unreadable, say so for that image and continue.
 </vision>
 ```
 
-## stop_rules (loops)
+## stop_rules
+
+Handles: loops that never terminate (Operator). For test-fix cycles, UI
+sweeps, and migrations. Pairs with a goal set through the plugin, which
+persists across turns.
 
 ```xml
 <stop_rules>

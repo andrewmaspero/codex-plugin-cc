@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.9.1 (fork)
+
+- Synced the internal `gpt-6-prompting` skill with the canonical codex-skills version (rewritten by Fable 5.1): operator experience is labelled, pre-launch brief checks are added, and the recipes no longer repeat the blocks.
+
 ## 1.9.0 (fork)
 
 GPT-6 only.
