@@ -113,7 +113,7 @@ test("rescue command absorbs continue semantics", () => {
   assert.doesNotMatch(rescue, /^context:\s*fork\b/m);
   assert.match(rescue, /--background\|--wait/);
   assert.match(rescue, /--resume\|--fresh/);
-  assert.match(rescue, /--model <model\|sol\|terra\|luna\|spark>/);
+  assert.match(rescue, /--model <model\|astra\|sol\|luna\|sol-5\.6\|terra\|luna-5\.6\|spark>/);
   assert.match(rescue, /--effort <none\|minimal\|low\|medium\|high>/);
   assert.match(rescue, /task-resume-candidate --json/);
   assert.match(rescue, /AskUserQuestion/);
@@ -124,10 +124,13 @@ test("rescue command absorbs continue semantics", () => {
   assert.match(rescue, /Do not forward them to `task`/i);
   assert.match(rescue, /`--model` and `--effort` are runtime-selection flags/i);
   assert.match(rescue, /Leave `--effort` unset unless the user explicitly asks for a specific reasoning effort/i);
-  assert.match(rescue, /`sol` maps to `gpt-5\.6-sol`/i);
-  assert.match(rescue, /`terra` maps to `gpt-5\.6-terra`/i);
-  assert.match(rescue, /`luna` maps to `gpt-5\.6-luna`/i);
-  assert.match(rescue, /`spark` maps to `gpt-5\.3-codex-spark`/i);
+  assert.match(rescue, /`astra` maps to `gpt-6-astra`/i);
+  assert.match(rescue, /`sol` maps to `gpt-6-sol`/i);
+  assert.match(rescue, /`terra` to `gpt-5\.6-terra`/i);
+  assert.match(rescue, /`luna` maps to `gpt-6-luna`/i);
+  assert.match(rescue, /`sol-5\.6` maps to `gpt-5\.6-sol`/i);
+  assert.match(rescue, /`luna-5\.6` to `gpt-5\.6-luna`/i);
+  assert.match(rescue, /`spark` to `gpt-5\.3-codex-spark`/i);
   assert.match(rescue, /If the request includes `--resume`, do not ask whether to continue/i);
   assert.match(rescue, /If the request includes `--fresh`, do not ask whether to continue/i);
   assert.match(rescue, /If the user chooses continue, add `--resume`/i);
@@ -147,11 +150,12 @@ test("rescue command absorbs continue semantics", () => {
   assert.match(agent, /Do not call `review`, `adversarial-review`, `status`, `result`, or `cancel`/i);
   assert.match(agent, /Leave `--effort` unset unless the user explicitly requests a specific reasoning effort/i);
   assert.match(agent, /Leave model unset by default/i);
-  assert.match(agent, /map `sol` to `--model gpt-5\.6-sol`/i);
+  assert.match(agent, /map `astra` to `--model gpt-6-astra`/i);
+  assert.match(agent, /`sol` to `--model gpt-6-sol`/i);
   assert.match(agent, /`terra` to `--model gpt-5\.6-terra`/i);
-  assert.match(agent, /`luna` to `--model gpt-5\.6-luna`/i);
+  assert.match(agent, /`luna` to `--model gpt-6-luna`/i);
   assert.match(agent, /`spark` to `--model gpt-5\.3-codex-spark`/i);
-  assert.match(agent, /If the user asks for a concrete model name such as `gpt-5\.6-terra`, pass it through with `--model`/i);
+  assert.match(agent, /If the user asks for a concrete model name such as `gpt-6-astra`, pass it through with `--model`/i);
   assert.match(agent, /Return the stdout of the `codex-companion` command exactly as-is/i);
   assert.match(agent, /If the Bash call fails or Codex cannot be invoked, return nothing/i);
   assert.match(agent, /gpt-5-4-prompting/);
@@ -163,20 +167,23 @@ test("rescue command absorbs continue semantics", () => {
   assert.match(runtimeSkill, /That prompt drafting is the only Claude-side work allowed/i);
   assert.match(runtimeSkill, /Leave `--effort` unset unless the user explicitly requests a specific effort/i);
   assert.match(runtimeSkill, /Leave model unset by default/i);
-  assert.match(runtimeSkill, /`sol` to `--model gpt-5\.6-sol`/i);
+  assert.match(runtimeSkill, /`astra` to `--model gpt-6-astra`/i);
+  assert.match(runtimeSkill, /`sol` to `--model gpt-6-sol`/i);
   assert.match(runtimeSkill, /`spark` to `--model gpt-5\.3-codex-spark`/i);
   assert.match(runtimeSkill, /If the forwarded request includes `--background` or `--wait`, treat that as Claude-side execution control only/i);
   assert.match(runtimeSkill, /Strip it before calling `task`/i);
   assert.match(runtimeSkill, /`--effort`: accepted values are `none`, `minimal`, `low`, `medium`, `high`/i);
-  assert.match(runtimeSkill, /`high` is the ceiling by policy/i);
+  assert.match(runtimeSkill, /`high` is the general ceiling by policy/i);
+  assert.match(runtimeSkill, /`gpt-6-astra` accepts only `low` or `medium`/i);
   assert.match(runtimeSkill, /Do not inspect the repository, read files, grep, monitor progress, poll status, fetch results, cancel jobs, summarize output, or do any follow-up work of your own/i);
   assert.match(runtimeSkill, /If the Bash call fails or Codex cannot be invoked, return nothing/i);
   assert.match(readme, /`codex:codex-rescue` subagent/i);
-  assert.match(readme, /if you do not pass `--model` or `--effort`, Codex chooses its own defaults/i);
-  assert.match(readme, /--model terra --effort medium/i);
+  assert.match(readme, /Fresh tasks and reviews default to `gpt-6-sol`/i);
+  assert.match(readme, /CODEX_COMPANION_DEFAULT_MODEL/);
+  assert.match(readme, /--model astra --effort medium/i);
   assert.match(readme, /--model sol --effort high/i);
-  assert.match(readme, /--model luna --effort low/i);
-  assert.match(readme, /`sol` → `gpt-5\.6-sol`/i);
+  assert.match(readme, /--model luna --effort none/i);
+  assert.match(readme, /`sol` → `gpt-6-sol`/i);
   assert.match(readme, /`spark` → `gpt-5\.3-codex-spark`/i);
   assert.match(readme, /continue a previous Codex task/i);
   assert.match(readme, /### `\/codex:setup`/);
@@ -189,6 +196,21 @@ test("rescue command absorbs continue semantics", () => {
   assert.match(readme, /### `\/codex:status`/);
   assert.match(readme, /### `\/codex:result`/);
   assert.match(readme, /### `\/codex:cancel`/);
+});
+
+test("follow-up and review docs describe GPT-6 defaults and effort limits", () => {
+  const continuation = read("commands/continue.md");
+  const review = read("commands/review.md");
+  const adversarial = read("commands/adversarial-review.md");
+
+  assert.match(continuation, /--model <model\|astra\|sol\|luna\|sol-5\.6\|terra\|luna-5\.6\|spark>/);
+  assert.match(continuation, /keeps the thread's model/i);
+  assert.match(continuation, /`gpt-6-astra` accepts only `low` or `medium`/i);
+  for (const source of [review, adversarial]) {
+    assert.match(source, /default model is `gpt-6-sol`/i);
+    assert.match(source, /CODEX_COMPANION_DEFAULT_MODEL/);
+    assert.match(source, /accepts effort `low` or `medium` only/i);
+  }
 });
 
 test("transfer, result, and cancel commands are exposed as deterministic runtime entrypoints", () => {

@@ -27,9 +27,10 @@ Forwarding rules:
 - Do not inspect the repository, read files, grep, monitor progress, poll status, fetch results, cancel jobs, summarize output, or do any follow-up work of your own.
 - Do not call `review`, `adversarial-review`, `status`, `result`, or `cancel`. This subagent only forwards to `task`.
 - Leave `--effort` unset unless the user explicitly requests a specific reasoning effort.
-- Leave model unset by default. Only add `--model` when the user explicitly asks for a specific model.
-- Model aliases: map `sol` to `--model gpt-5.6-sol`, `terra` to `--model gpt-5.6-terra`, `luna` to `--model gpt-5.6-luna`, and `spark` to `--model gpt-5.3-codex-spark`.
-- If the user asks for a concrete model name such as `gpt-5.6-terra`, pass it through with `--model`.
+- Leave model unset by default. Only add `--model` when the user explicitly asks for a specific model. Fresh tasks default to `gpt-6-sol` (or `CODEX_COMPANION_DEFAULT_MODEL`); resumed tasks keep their thread's model.
+- Model aliases: map `astra` to `--model gpt-6-astra`, `sol` to `--model gpt-6-sol`, `luna` to `--model gpt-6-luna`; legacy aliases map `sol-5.6` to `--model gpt-5.6-sol`, `terra` to `--model gpt-5.6-terra`, `luna-5.6` to `--model gpt-5.6-luna`, and `spark` to `--model gpt-5.3-codex-spark`.
+- `astra` is frontier and expensive: use sparingly, with effort `low` or `medium` only (the runtime sends `medium` when effort is omitted). `sol` is the default workhorse for coding and reviews. `luna` is near-free and fast, strong for bulk, vision, research, and strictly specified coding; it supports effort `none`. Accepted efforts are `none`, `minimal`, `low`, `medium`, and `high`; the general policy ceiling is `high`.
+- If the user asks for a concrete model name such as `gpt-6-astra`, pass it through with `--model`.
 - Treat `--effort <value>` and `--model <value>` as runtime controls and do not include them in the task text you pass through.
 - Sandbox controls: `--full` (or `--sandbox danger-full-access`) runs with full permissions, `--write` allows workspace writes, `--sandbox <mode>` sets an explicit mode. Treat these as runtime controls and forward them without including them in the task text.
 - If the user passed no sandbox control, do not add one: the workspace's configured default sandbox (set via `setup --sandbox`) applies. Only add `--write` when the task clearly requires edits, the user gave no sandbox control, and no workspace default is known.

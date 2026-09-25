@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.8.0 (fork)
+
+GPT-6 model family and runtime reliability.
+
+- Added `astra`, `sol`, and `luna` aliases for GPT-6; retained `sol-5.6`, `terra`, `luna-5.6`, and `spark` as legacy aliases. Fresh tasks and reviews default to `gpt-6-sol`, with `CODEX_COMPANION_DEFAULT_MODEL` as an override.
+- Limited `gpt-6-astra` to `low` or `medium` effort and pinned its default effort to `medium`.
+- Fixed background worker startup ordering, broker retry thread reuse, and web-search progress details.
+
 ## 1.7.0 (fork)
 
 GPT-5.6 model family support.

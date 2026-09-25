@@ -44,6 +44,7 @@ import {
   getConfig,
   listActiveWorktreePaths,
   listJobs,
+  patchQueuedJobPid,
   readJobFile,
   resolveJobFileGlobally,
   setConfig,
@@ -56,6 +57,7 @@ import {
   buildStatusSnapshot,
   reapOrphanedJobs,
   readStoredJob,
+  waitForStoredJob,
   resolveCancelableJob,
   resolveResultJob,
   sortJobsNewestFirst
@@ -121,11 +123,15 @@ const WAIT_REAP_INTERVAL_MS = 5000;
 // the thread's latest turn state (bounded to one app-server query per window).
 const WAIT_TURN_RECONCILE_INTERVAL_MS = 30000;
 const VALID_REASONING_EFFORTS = new Set(["none", "minimal", "low", "medium", "high"]);
+const DEFAULT_TASK_MODEL = "gpt-6-sol";
 const MODEL_ALIASES = new Map([
-  ["spark", "gpt-5.3-codex-spark"],
-  ["sol", "gpt-5.6-sol"],
+  ["astra", "gpt-6-astra"],
+  ["sol", "gpt-6-sol"],
+  ["luna", "gpt-6-luna"],
+  ["sol-5.6", "gpt-5.6-sol"],
   ["terra", "gpt-5.6-terra"],
-  ["luna", "gpt-5.6-luna"]
+  ["luna-5.6", "gpt-5.6-luna"],
+  ["spark", "gpt-5.3-codex-spark"]
 ]);
 const MIN_NODE_VERSION = { major: 22, minor: 18, patch: 0 };
 const MIN_NODE_VERSION_LABEL = "22.18.0";
@@ -194,7 +200,7 @@ function printUsage() {
       "  node scripts/codex-companion.mts setup [--enable-review-gate|--disable-review-gate] [--sandbox <read-only|write|full|clear>] [--statusline] [--json]",
       "  node scripts/codex-companion.mts review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>]",
       "  node scripts/codex-companion.mts adversarial-review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [focus text]",
-      "  node scripts/codex-companion.mts task [--background] [--write|--full|--sandbox <mode>] [--worktree|--worktree-name <name>] [--goal <objective>] [--goal-budget <tokens>] [--resume-last|--resume|--fresh] [--model <model|sol|terra|luna|spark>] [--effort <none|minimal|low|medium|high>] [prompt]",
+      "  node scripts/codex-companion.mts task [--background] [--write|--full|--sandbox <mode>] [--worktree|--worktree-name <name>] [--goal <objective>] [--goal-budget <tokens>] [--resume-last|--resume|--fresh] [--model <astra|sol|luna|sol-5.6|terra|luna-5.6|spark|model>] [--effort <none|minimal|low|medium|high>] [prompt]",
       "  node scripts/codex-companion.mts transfer [--source <claude-jsonl>] [--json]",
       "  node scripts/codex-companion.mts status [job-id] [--all] [--wait] [--timeout-ms <ms, 0 = until done>] [--poll-interval-ms <ms>] [--json]",
       "  node scripts/codex-companion.mts wait <job-id> [--timeout <seconds>]",
@@ -209,7 +215,7 @@ function printUsage() {
       "  node scripts/codex-companion.mts alerts [job-id] [--stall-seconds <n>] [--no-goals] [--json]",
       "  node scripts/codex-companion.mts goal <set|show|clear> [job-id|thread-id] [--budget <tokens>] [--status <status>] [-- <objective>]",
       "  node scripts/codex-companion.mts artifacts [job-id] [--limit <n>] [--json]",
-      "  node scripts/codex-companion.mts continue <thread-id> [--background] [--write|--full|--sandbox <mode>] [--worktree|--worktree-name <name>] [--goal <objective>] [--goal-budget <tokens>] [--model <model|sol|terra|luna|spark>] [--effort <none|minimal|low|medium|high>] [prompt]",
+      "  node scripts/codex-companion.mts continue <thread-id> [--background] [--write|--full|--sandbox <mode>] [--worktree|--worktree-name <name>] [--goal <objective>] [--goal-budget <tokens>] [--model <astra|sol|luna|sol-5.6|terra|luna-5.6|spark|model>] [--effort <none|minimal|low|medium|high>] [prompt]",
       "  node scripts/codex-companion.mts worktrees [--prune] [--json]"
     ].join("\n")
   );
@@ -285,6 +291,10 @@ function normalizeRequestedModel(model) {
   return MODEL_ALIASES.get(normalized.toLowerCase()) ?? normalized;
 }
 
+function resolveFreshTaskModel(model) {
+  return normalizeRequestedModel(model) ?? normalizeRequestedModel(process.env.CODEX_COMPANION_DEFAULT_MODEL) ?? DEFAULT_TASK_MODEL;
+}
+
 function normalizeSandboxMode(value) {
   if (value == null) {
     return null;
@@ -336,6 +346,19 @@ function normalizeReasoningEffort(effort) {
     );
   }
   return normalized;
+}
+
+function resolveModelEffort(model, effort) {
+  if (model !== "gpt-6-astra") {
+    return effort;
+  }
+  if (effort === "high") {
+    throw new Error("gpt-6-astra is capped at --effort medium by policy (cost). Use --effort medium or lower, or pick sol.");
+  }
+  if (effort === "none" || effort === "minimal") {
+    throw new Error("gpt-6-astra does not support --effort none/minimal; use low or medium.");
+  }
+  return effort ?? "medium";
 }
 
 function normalizeArgv(argv) {
@@ -853,6 +876,7 @@ async function executeReviewRun(request) {
   const result = await runAppServerTurn(context.repoRoot, {
     prompt,
     model: request.model,
+    effort: resolveModelEffort(request.model, null),
     sandbox: "read-only",
     outputSchema: readOutputSchema(REVIEW_SCHEMA),
     onRuntimeEndpoint: request.jobId
@@ -1063,7 +1087,7 @@ function getJobKindLabel(kind, jobClass) {
   return jobClass === "review" ? "review" : "rescue";
 }
 
-function createCompanionJob({ prefix, kind, title, workspaceRoot, jobClass, summary, write = false }) {
+function createCompanionJob({ prefix, kind, title, workspaceRoot, jobClass, summary, write = false }): JobRecord {
   return createJobRecord({
     id: generateJobId(prefix),
     kind,
@@ -1246,17 +1270,18 @@ function enqueueBackgroundTask(cwd, job, request) {
   const { logFile } = createTrackedProgress(job);
   appendLogLine(logFile, "Queued for background execution.");
 
-  const child = spawnDetachedTaskWorker(cwd, job.id, logFile);
   const queuedRecord = {
     ...job,
     status: "queued",
     phase: "queued",
-    pid: child.pid ?? null,
+    pid: null,
     logFile,
     request
   };
   writeJobFile(job.workspaceRoot, job.id, queuedRecord);
   upsertJob(job.workspaceRoot, queuedRecord);
+  const child = spawnDetachedTaskWorker(cwd, job.id, logFile);
+  patchQueuedJobPid(job.workspaceRoot, job.id, child.pid ?? null);
 
   return {
     payload: {
@@ -1306,6 +1331,8 @@ async function handleReviewCommand(argv, config) {
   const cwd = resolveCommandCwd(options);
   const workspaceRoot = resolveCommandWorkspace(options);
   const focusText = positionals.join(" ").trim();
+  const model = resolveFreshTaskModel(options.model);
+  resolveModelEffort(model, null);
 
   if (options.background) {
     ensureCodexAvailable(cwd);
@@ -1319,12 +1346,13 @@ async function handleReviewCommand(argv, config) {
       jobClass: "review",
       summary: `${config.reviewName} queued`
     });
+    job.model = model;
     const request = buildReviewRequest({
       cwd,
       workspaceRoot,
       base: options.base,
       scope: options.scope,
-      model: options.model,
+      model,
       focusText,
       reviewName: config.reviewName,
       jobId: job.id
@@ -1349,6 +1377,7 @@ async function handleReviewCommand(argv, config) {
     jobClass: "review",
     summary: metadata.summary
   });
+  job.model = model;
   await runForegroundCommand(
     job,
     (progress) =>
@@ -1358,7 +1387,7 @@ async function handleReviewCommand(argv, config) {
         jobId: job.id,
         base: options.base,
         scope: options.scope,
-        model: options.model,
+        model,
         focusText,
         reviewName: config.reviewName,
         onProgress: progress
@@ -1385,8 +1414,10 @@ async function handleTask(argv) {
 
   const cwd = resolveCommandCwd(options);
   const workspaceRoot = resolveCommandWorkspace(options);
-  const model = normalizeRequestedModel(options.model);
-  const effort = normalizeReasoningEffort(options.effort);
+  const model = options["resume-last"] || options.resume
+    ? normalizeRequestedModel(options.model)
+    : resolveFreshTaskModel(options.model);
+  const effort = resolveModelEffort(model, normalizeReasoningEffort(options.effort));
   const prompt = readTaskPrompt(cwd, options, positionals);
 
   const resumeLast = Boolean(options["resume-last"] || options.resume);
@@ -1403,6 +1434,7 @@ async function handleTask(argv) {
   });
 
   let job = buildTaskJob(workspaceRoot, taskMetadata, { write, sandbox });
+  job.model = model;
   const worktreeSetup = setupJobWorktree(cwd, job, options);
   job = worktreeSetup.job;
   const request = buildTaskRequest({
@@ -1525,7 +1557,7 @@ async function handleTaskWorker(argv) {
 
   const cwd = resolveCommandCwd(options);
   const workspaceRoot = resolveCommandWorkspace(options);
-  const storedJob = readStoredJob(workspaceRoot, String(options["job-id"]));
+  const storedJob = await waitForStoredJob(workspaceRoot, String(options["job-id"]));
   if (!storedJob) {
     throw new Error(`No stored job found for ${options["job-id"]}.`);
   }
@@ -1956,7 +1988,7 @@ async function handleContinue(argv) {
   const cwd = resolveCommandCwd(options);
   const workspaceRoot = resolveCommandWorkspace(options);
   const model = normalizeRequestedModel(options.model);
-  const effort = normalizeReasoningEffort(options.effort);
+  const effort = resolveModelEffort(model, normalizeReasoningEffort(options.effort));
   // `--prompt-stdin` reads the follow-up prompt from stdin so prose containing
   // backticks, quotes, or `$` never passes through shell interpretation; in that
   // mode positionals hold only the thread id.
@@ -1966,6 +1998,7 @@ async function handleContinue(argv) {
 
   const taskMetadata = buildTaskRunMetadata({ prompt, resumeThreadId: threadId });
   let job = buildTaskJob(workspaceRoot, taskMetadata, { write, sandbox });
+  job.model = model;
   const worktreeSetup = setupJobWorktree(cwd, job, options);
   job = worktreeSetup.job;
   const request = buildTaskRequest({

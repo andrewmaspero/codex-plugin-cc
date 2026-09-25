@@ -45,6 +45,7 @@ export interface JobRecord {
   cwd?: string;
   workspaceRoot?: string;
   threadId?: string | null;
+  model?: string | null;
   rootThreadId?: string | null;
   turnId?: string | null;
   sessionId?: string | null;
@@ -301,6 +302,26 @@ export function upsertJob(cwd: string, jobPatch: JobPatch): PluginState {
       ...jobPatch,
       updatedAt: timestamp
     };
+  });
+}
+
+export function patchQueuedJobPid(cwd: string, jobId: string, pid: number | null): PluginState {
+  return updateState(cwd, (state) => {
+    const job = state.jobs.find((entry) => entry.id === jobId);
+    if (!job || job.status !== "queued") {
+      return;
+    }
+    const jobFile = resolveJobFile(cwd, jobId);
+    if (!fs.existsSync(jobFile)) {
+      return;
+    }
+    const stored = readJobFile(jobFile);
+    if (stored.status !== "queued") {
+      return;
+    }
+    writeJobFile(cwd, jobId, { ...stored, pid });
+    job.pid = pid;
+    job.updatedAt = nowIso();
   });
 }
 

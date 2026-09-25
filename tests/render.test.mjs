@@ -2,6 +2,15 @@ import { test } from "vitest";
 import assert from "node:assert/strict";
 
 import { renderReviewResult, renderStoredJobResult } from "../plugins/codex/scripts/lib/render.mts";
+import { renderWebSearchProgress } from "../plugins/codex/scripts/lib/codex.mts";
+
+test("web search progress renders action query and open-page URL", () => {
+  const search = { type: "webSearch", id: "web_1", query: "", action: { type: "search", query: "GPT-6 model guidance", queries: null }, results: null };
+  assert.equal(renderWebSearchProgress(search), "Searching: GPT-6 model guidance");
+  const open = { type: "webSearch", id: "web_2", query: "", action: { type: "openPage", url: "https://example.com/docs" }, results: null };
+  assert.equal(renderWebSearchProgress(open), "Opening: https://example.com/docs");
+  assert.equal(renderWebSearchProgress({ ...search, action: { type: "search", query: "q".repeat(140), queries: null } }).length, "Searching: ".length + 120);
+});
 
 test("renderReviewResult degrades gracefully when JSON is missing required review fields", () => {
   const output = renderReviewResult(

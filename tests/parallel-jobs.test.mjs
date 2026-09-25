@@ -153,3 +153,30 @@ test("two parallel jobs in one workspace are both steerable", async () => {
     endSession(repo, env);
   }
 });
+
+test("broker retry resumes a thread created before turn/start became busy", () => {
+  const repo = makeRepo();
+  const binDir = makeTempDir();
+  installFakeCodex(binDir, "broker-busy-after-thread-start");
+  const env = cleanEnv(binDir);
+
+  try {
+    const result = run("node", [SCRIPT, "task", "--json", "investigate the broker race"], { cwd: repo, env });
+    assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
+
+    const fakeState = JSON.parse(fs.readFileSync(path.join(binDir, "fake-codex-state.json"), "utf8"));
+    assert.equal(fakeState.threads.length, 1, "retry should not start a stray thread");
+    assert.equal(fakeState.lastThreadResume.threadId, fakeState.threads[0].id);
+    assert.equal(fakeState.lastTurnStart.threadId, fakeState.threads[0].id);
+
+    const jobs = readJobs(repo);
+    assert.equal(jobs.length, 1);
+    assert.equal(jobs[0].status, "completed");
+    const log = fs.readFileSync(jobs[0].logFile, "utf8");
+    assert.match(log, /Retrying Codex runtime with a dedicated broker: Shared Codex broker is busy after thread\/start\./);
+    assert.match(log, /Resuming thread thr_1\./);
+    assert.doesNotMatch(log, /runtime connection closed before the turn completed/);
+  } finally {
+    endSession(repo, env);
+  }
+});
