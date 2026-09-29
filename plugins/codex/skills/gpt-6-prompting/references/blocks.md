@@ -127,8 +127,7 @@ names. Prefer primary sources (vendor docs, source code, release notes).
 
 ## delegation
 
-Handles: under-delegating (OpenAI). Only for large decomposable jobs on Sol
-or Astra.
+Handles: under-delegating (OpenAI). Only for large decomposable jobs on Sol.
 
 ```xml
 <delegation>

@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.11.0 (fork)
+
+Sol 6.1.
+
+- `sol` now maps to `gpt-6.1-sol`, which is also the default model for fresh tasks, reviews, and the review gate. `gpt-6-sol` has been replaced and is rejected before launch. A follow-up on an existing thread with no `--model` still keeps that thread's model.
+- Routing: Sol 6.1 outperforms Astra, so it is now the main model for everything, including architecture reviews, prompt authoring, and complex computer use (recipes moved from Astra to Sol at `high`). Astra is used only when the user asks for it by name; its `medium` effort cap is unchanged.
+
 ## 1.10.0 (fork)
 
 Read-only chat bridge MCP server.

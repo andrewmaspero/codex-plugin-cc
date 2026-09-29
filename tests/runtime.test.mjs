@@ -812,10 +812,10 @@ test("task rejects every non-GPT-6 model before launch", () => {
   initGitRepo(repo);
   const env = buildEnv(binDir);
 
-  for (const model of ["spark", "terra", "sol-5.6", "luna-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.3-codex-spark", "gpt-5.5", "gpt-5.4"]) {
+  for (const model of ["gpt-6-sol", "spark", "terra", "sol-5.6", "luna-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.3-codex-spark", "gpt-5.5", "gpt-5.4"]) {
     const result = run("node", [SCRIPT, "task", "--model", model, "diagnose"], { cwd: repo, env });
     assert.notEqual(result.status, 0, `model ${model} should be rejected`);
-    assert.match(result.stderr, /Unsupported model ".+"\. Use luna, sol, or astra \(gpt-6-luna, gpt-6-sol, gpt-6-astra\)\./);
+    assert.match(result.stderr, /Unsupported model ".+"\. Use luna, sol, or astra \(gpt-6-luna, gpt-6\.1-sol, gpt-6-astra\)\./);
     assert.equal(fs.existsSync(statePath), false);
   }
 
@@ -842,9 +842,9 @@ test("fresh tasks and reviews default to sol, while continued threads keep their
   const task = run("node", [SCRIPT, "task", "initial task"], { cwd: repo, env });
   assert.equal(task.status, 0, task.stderr);
   let fakeState = JSON.parse(fs.readFileSync(statePath, "utf8"));
-  assert.equal(fakeState.lastTurnStart.model, "gpt-6-sol");
+  assert.equal(fakeState.lastTurnStart.model, "gpt-6.1-sol");
   let jobs = JSON.parse(fs.readFileSync(path.join(resolveStateDir(repo), "state.json"), "utf8")).jobs;
-  assert.equal(jobs[0].model, "gpt-6-sol");
+  assert.equal(jobs[0].model, "gpt-6.1-sol");
 
   const continued = run("node", [SCRIPT, "continue", "thr_1", "follow up"], { cwd: repo, env });
   assert.equal(continued.status, 0, continued.stderr);
@@ -861,16 +861,16 @@ test("fresh tasks and reviews default to sol, while continued threads keep their
   const review = run("node", [SCRIPT, "review"], { cwd: repo, env });
   assert.equal(review.status, 0, review.stderr);
   fakeState = JSON.parse(fs.readFileSync(statePath, "utf8"));
-  assert.equal(fakeState.lastThreadStart.params.model, "gpt-6-sol");
+  assert.equal(fakeState.lastThreadStart.params.model, "gpt-6.1-sol");
   jobs = JSON.parse(fs.readFileSync(path.join(resolveStateDir(repo), "state.json"), "utf8")).jobs;
-  assert.equal(jobs[0].model, "gpt-6-sol");
+  assert.equal(jobs[0].model, "gpt-6.1-sol");
 
   const adversarial = run("node", [SCRIPT, "adversarial-review"], { cwd: repo, env });
   assert.equal(adversarial.status, 0, adversarial.stderr);
   fakeState = JSON.parse(fs.readFileSync(statePath, "utf8"));
-  assert.equal(fakeState.lastTurnStart.model, "gpt-6-sol");
+  assert.equal(fakeState.lastTurnStart.model, "gpt-6.1-sol");
   jobs = JSON.parse(fs.readFileSync(path.join(resolveStateDir(repo), "state.json"), "utf8")).jobs;
-  assert.equal(jobs[0].model, "gpt-6-sol");
+  assert.equal(jobs[0].model, "gpt-6.1-sol");
 
   const overrideEnv = { ...env, CODEX_COMPANION_DEFAULT_MODEL: "luna" };
   const overridden = run("node", [SCRIPT, "task", "fresh with env default"], { cwd: repo, env: overrideEnv });
@@ -893,9 +893,9 @@ test("task maps GPT-6 aliases and slugs and caps reasoning effort at high", () =
 
   const cases = [
     { alias: "astra", slug: "gpt-6-astra", effort: "medium" },
-    { alias: "sol", slug: "gpt-6-sol", effort: "high" },
+    { alias: "sol", slug: "gpt-6.1-sol", effort: "high" },
     { alias: "luna", slug: "gpt-6-luna", effort: "none" },
-    { alias: "gpt-6-sol", slug: "gpt-6-sol", effort: "low" },
+    { alias: "gpt-6.1-sol", slug: "gpt-6.1-sol", effort: "low" },
     { alias: "GPT-6-Luna", slug: "gpt-6-luna", effort: "medium" },
     { alias: "gpt-6-astra", slug: "gpt-6-astra", effort: "low" }
   ];
@@ -1171,7 +1171,7 @@ test("concurrent background launches publish requests before workers read them",
     const log = fs.readFileSync(stored.logFile, "utf8");
     assert.doesNotMatch(log, /No stored job found/);
     assert.equal(stored.status, "completed", log);
-    assert.equal(stored.model, "gpt-6-sol");
+    assert.equal(stored.model, "gpt-6.1-sol");
   }
 });
 
@@ -2242,7 +2242,7 @@ test("stop hook runs a stop-time review task and blocks on findings when the rev
   assert.match(blockedPayload.reason, /Missing empty-state guard/i);
 
   const fakeState = JSON.parse(fs.readFileSync(fakeStatePath, "utf8"));
-  assert.equal(fakeState.lastTurnStart.model, "gpt-6-sol");
+  assert.equal(fakeState.lastTurnStart.model, "gpt-6.1-sol");
   assert.match(fakeState.lastTurnStart.prompt, /<task>/i);
   assert.match(fakeState.lastTurnStart.prompt, /<compact_output_contract>/i);
   assert.match(fakeState.lastTurnStart.prompt, /Only review the work from the previous Claude turn/i);
