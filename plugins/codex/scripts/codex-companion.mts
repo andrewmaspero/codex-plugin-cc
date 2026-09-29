@@ -125,12 +125,12 @@ const WAIT_TURN_RECONCILE_INTERVAL_MS = 30000;
 // GPT-6 only. `high` is the policy ceiling for every model (cost), even though
 // the models themselves accept xhigh/max.
 const VALID_REASONING_EFFORTS = new Set(["none", "low", "medium", "high"]);
-const DEFAULT_TASK_MODEL = "gpt-6-sol";
+const DEFAULT_TASK_MODEL = "gpt-6.1-sol";
 // The only supported models. Older families (5.x Sol/Terra/Luna, Spark) are
 // retired and rejected rather than passed through.
 const MODEL_ALIASES = new Map([
   ["luna", "gpt-6-luna"],
-  ["sol", "gpt-6-sol"],
+  ["sol", "gpt-6.1-sol"],
   ["astra", "gpt-6-astra"]
 ]);
 const SUPPORTED_MODELS = new Set(MODEL_ALIASES.values());
@@ -293,7 +293,7 @@ function normalizeRequestedModel(model) {
   const resolved = MODEL_ALIASES.get(lowered) ?? lowered;
   if (!SUPPORTED_MODELS.has(resolved)) {
     throw new Error(
-      `Unsupported model "${model}". Use luna, sol, or astra (gpt-6-luna, gpt-6-sol, gpt-6-astra).`
+      `Unsupported model "${model}". Use luna, sol, or astra (gpt-6-luna, gpt-6.1-sol, gpt-6-astra).`
     );
   }
   return resolved;

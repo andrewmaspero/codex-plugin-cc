@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.11.0 (fork)
+
+Sol 6.1.
+
+- `sol` now maps to `gpt-6.1-sol`, which is also the default model for fresh tasks, reviews, and the review gate. `gpt-6-sol` has been replaced and is rejected before launch. A follow-up on an existing thread with no `--model` still keeps that thread's model.
+
 ## 1.10.0 (fork)
 
 Read-only chat bridge MCP server.

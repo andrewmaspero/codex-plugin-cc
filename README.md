@@ -176,8 +176,8 @@ Ask Codex to redesign the database connection to be more resilient.
 
 **Notes:**
 
-- Fresh tasks and reviews default to `gpt-6-sol`; set `CODEX_COMPANION_DEFAULT_MODEL` to an alias or model name to override it. A follow-up (`continue` or `task --resume-last`) keeps its thread's model unless you pass `--model`.
-- Models: GPT-6 only. `luna` → `gpt-6-luna` (near-free, fast; bulk, vision, research, strictly specified coding; supports effort `none`), `sol` → `gpt-6-sol` (default workhorse for coding and reviews), `astra` → `gpt-6-astra` (frontier, expensive; use sparingly; effort `low` or `medium` only). Any other model is rejected.
+- Fresh tasks and reviews default to `gpt-6.1-sol`; set `CODEX_COMPANION_DEFAULT_MODEL` to an alias or model name to override it. A follow-up (`continue` or `task --resume-last`) keeps its thread's model unless you pass `--model`.
+- Models: GPT-6 only. `luna` → `gpt-6-luna` (near-free, fast; bulk, vision, research, strictly specified coding; supports effort `none`), `sol` → `gpt-6.1-sol` (default workhorse for coding and reviews), `astra` → `gpt-6-astra` (frontier, expensive; use sparingly; effort `low` or `medium` only). Any other model is rejected.
 - Accepted `--effort` values: `none`, `low`, `medium`, `high`. The general policy ceiling is `high`; `gpt-6-astra` accepts only `low` or `medium` and uses `medium` when effort is omitted.
 - follow-up rescue requests can continue the latest Codex task in the repo
 
@@ -251,7 +251,7 @@ You can also use `/codex:setup` to manage the optional review gate.
 /codex:setup --disable-review-gate
 ```
 
-When the review gate is enabled, the plugin uses a `Stop` hook to run a targeted Codex review based on Claude's response. It defaults to `gpt-6-sol` (or `CODEX_COMPANION_DEFAULT_MODEL`). If that review finds issues, the stop is blocked so Claude can address them first.
+When the review gate is enabled, the plugin uses a `Stop` hook to run a targeted Codex review based on Claude's response. It defaults to `gpt-6.1-sol` (or `CODEX_COMPANION_DEFAULT_MODEL`). If that review finds issues, the stop is blocked so Claude can address them first.
 
 > [!WARNING]
 > The review gate can create a long-running Claude/Codex loop and may drain usage limits quickly. Only enable it when you plan to actively monitor the session.
@@ -358,7 +358,7 @@ The Codex plugin wraps the [Codex app server](https://developers.openai.com/code
 
 ### Common Configurations
 
-Fresh plugin tasks and reviews set their model explicitly to `gpt-6-sol`; use `CODEX_COMPANION_DEFAULT_MODEL` to change that default. `config.toml` still supplies other Codex settings, including reasoning effort when `--effort` is omitted (except `gpt-6-astra`, which the plugin sets to `medium`). For example, to use `high` effort with the default workhorse model for a trusted project, add this to `.codex/config.toml` at the root of the directory you started Claude in:
+Fresh plugin tasks and reviews set their model explicitly to `gpt-6.1-sol`; use `CODEX_COMPANION_DEFAULT_MODEL` to change that default. `config.toml` still supplies other Codex settings, including reasoning effort when `--effort` is omitted (except `gpt-6-astra`, which the plugin sets to `medium`). For example, to use `high` effort with the default workhorse model for a trusted project, add this to `.codex/config.toml` at the root of the directory you started Claude in:
 
 ```toml
 model_reasoning_effort = "high"

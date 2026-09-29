@@ -162,7 +162,7 @@ function buildFixture() {
           status: "running",
           phase: "editing",
           pid: process.pid,
-          model: "gpt-6-sol",
+          model: "gpt-6.1-sol",
           createdAt: new Date(Date.now() - 125_000).toISOString(),
           updatedAt: now,
           threadId: "thr_live",
@@ -323,7 +323,7 @@ test("list_running shows live jobs across workspaces and hides stale records", (
   const { ctx } = buildFixture();
   const text = listRunningJobs(ctx, {});
   assert.match(text, /jobs across all workspaces: 2\./);
-  assert.match(text, /task-live \| task \| running\/editing \| gpt-6-sol \| elapsed 2m \d+s \| pid \d+ \| thread thr_live/);
+  assert.match(text, /task-live \| task \| running\/editing \| gpt-6\.1-sol \| elapsed 2m \d+s \| pid \d+ \| thread thr_live/);
   assert.match(text, /last: Editing with sk-\[REDACTED\]/);
   assert.match(text, /log: .*task-live\.log/);
   assert.match(text, /workspace: \/work\/alpha/);

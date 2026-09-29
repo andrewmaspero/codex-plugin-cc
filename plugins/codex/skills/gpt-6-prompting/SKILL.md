@@ -33,7 +33,7 @@ OpenAI guide when a new release ships.
 | model | slug | $ in/out per 1M | efforts | use it for |
 |---|---|---|---|---|
 | Luna | `gpt-6-luna` | 0.10 / 0.50 | none, low, medium, high | Research, lookups, codebase scans, bulk vision (screenshots, documents, image triage), data extraction, and coding under a strict spec. |
-| Sol | `gpt-6-sol` | 2 / 10 | none, low, medium, high | Multi-file implementation, debugging, test and lint loops, reviews. The default for anything that has to be right. |
+| Sol | `gpt-6.1-sol` | 2 / 10 | none, low, medium, high | Multi-file implementation, debugging, test and lint loops, reviews. The default for anything that has to be right. |
 | Astra | `gpt-6-astra` | 10 / 50 | low, medium | Architecture reviews and second opinions, prompt authoring for other models, complex computer use (for example redrawing a drawing in Figma), 3D and CAD. |
 
 Operator notes on each:

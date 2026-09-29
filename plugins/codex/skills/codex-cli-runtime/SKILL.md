@@ -19,8 +19,8 @@ Execution rules:
 - You may use the `gpt-6-prompting` skill to rewrite the user's request into a tighter Codex prompt before the single `task` call.
 - That prompt drafting is the only Claude-side work allowed. Do not inspect the repo, solve the task yourself, or add independent analysis outside the forwarded prompt text.
 - Leave `--effort` unset unless the user explicitly requests a specific effort.
-- Leave model unset by default. Add `--model` only when the user explicitly asks for one. Fresh tasks default to `gpt-6-sol` (or `CODEX_COMPANION_DEFAULT_MODEL`); resumed tasks keep their thread's model.
-- Models: GPT-6 only. Map `luna` to `--model gpt-6-luna`, `sol` to `--model gpt-6-sol`, `astra` to `--model gpt-6-astra`. Any other model name is rejected by the runtime.
+- Leave model unset by default. Add `--model` only when the user explicitly asks for one. Fresh tasks default to `gpt-6.1-sol` (or `CODEX_COMPANION_DEFAULT_MODEL`); resumed tasks keep their thread's model.
+- Models: GPT-6 only. Map `luna` to `--model gpt-6-luna`, `sol` to `--model gpt-6.1-sol`, `astra` to `--model gpt-6-astra`. Any other model name is rejected by the runtime.
 - `astra` is frontier and expensive: use sparingly, at effort `low` or `medium` only. With no `--effort`, the runtime sends `medium` for astra. `sol` is the default workhorse for coding and reviews. `luna` is near-free and fast, strong for bulk, vision, research, and strictly specified coding; it supports effort `none`.
 - Sandbox: forward `--write`, `--full`, `--sandbox <mode>`, `--worktree`, and `--worktree-name <name>` when present; strip them from the task text. If the user passed no sandbox control, add NOTHING — the workspace's configured default sandbox (set with `/codex:setup --sandbox`) applies, and adding `--write` would silently downgrade a workspace configured for full access. Only add `--write` when the task clearly requires edits AND the workspace has no configured default (setup report shows `default sandbox: read-only`).
 - Forward `--goal <objective>` and `--goal-budget <tokens>` when present; strip them from the task text.
@@ -28,7 +28,7 @@ Execution rules:
 Command selection:
 - Use exactly one `task` invocation per rescue handoff.
 - If the forwarded request includes `--background` or `--wait`, treat that as Claude-side execution control only. Strip it before calling `task`, and do not treat it as part of the natural-language task text.
-- If the forwarded request includes `--model`, normalize aliases (`luna` to `gpt-6-luna`, `sol` to `gpt-6-sol`, `astra` to `gpt-6-astra`) and pass it through to `task`.
+- If the forwarded request includes `--model`, normalize aliases (`luna` to `gpt-6-luna`, `sol` to `gpt-6.1-sol`, `astra` to `gpt-6-astra`) and pass it through to `task`.
 - If the forwarded request includes `--effort`, pass it through to `task`.
 - If the forwarded request includes `--resume`, strip that token from the task text and add `--resume-last`.
 - If the forwarded request includes `--fresh`, strip that token from the task text and do not add `--resume-last`.

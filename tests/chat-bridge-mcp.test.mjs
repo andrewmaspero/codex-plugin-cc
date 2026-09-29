@@ -35,7 +35,7 @@ function seedFakeCodex(binDir, cwd) {
       cwd,
       name: "Main design thread",
       preview: "Design the parser",
-      model: "gpt-6-sol",
+      model: "gpt-6.1-sol",
       reasoningEffort: "high",
       createdAt: 1_790_000_000,
       updatedAt: 1_790_000_300,
@@ -221,7 +221,7 @@ test("list_chats and read_chat reach Codex through a direct app-server (thread/l
     const text = listed.content[0].text;
     const rows = text.split("\n").filter((line) => line.startsWith("codex |"));
     assert.equal(rows.length, 2, text);
-    assert.match(rows[0], new RegExp(`^codex \\| thr_main \\| \\d{4}-\\d\\d-\\d\\d \\d\\d:\\d\\dZ \\| [^|]*/work \\| gpt-6-sol/high \\| Main design thread$`));
+    assert.match(rows[0], new RegExp(`^codex \\| thr_main \\| \\d{4}-\\d\\d-\\d\\d \\d\\d:\\d\\dZ \\| [^|]*/work \\| gpt-6\\.1-sol/high \\| Main design thread$`));
     assert.match(rows[1], /^codex \| thr_old \| .* \| \/elsewhere \| gpt-6-astra \| Old thread$/);
 
     const state = readFakeState(binDir);
