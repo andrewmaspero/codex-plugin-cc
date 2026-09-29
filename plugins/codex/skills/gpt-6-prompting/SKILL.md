@@ -1,6 +1,6 @@
 ---
 name: gpt-6-prompting
-description: "Internal guidance for the Codex plugin: write briefs, steering deltas, and goals for GPT-6 Luna, Sol, and Astra, pick the model and reasoning effort, and use Astra to author prompts for other models. Load before composing any task, continue, steer, or goal text."
+description: "Internal guidance for the Codex plugin: write briefs, steering deltas, and goals for GPT-6 Luna, Sol, and Astra, pick the model and reasoning effort, and use Sol to author prompts for other models. Load before composing any task, continue, steer, or goal text."
 user-invocable: false
 ---
 
@@ -33,32 +33,35 @@ OpenAI guide when a new release ships.
 | model | slug | $ in/out per 1M | efforts | use it for |
 |---|---|---|---|---|
 | Luna | `gpt-6-luna` | 0.10 / 0.50 | none, low, medium, high | Research, lookups, codebase scans, bulk vision (screenshots, documents, image triage), data extraction, and coding under a strict spec. |
-| Sol | `gpt-6.1-sol` | 2 / 10 | none, low, medium, high | Multi-file implementation, debugging, test and lint loops, reviews. The default for anything that has to be right. |
-| Astra | `gpt-6-astra` | 10 / 50 | low, medium | Architecture reviews and second opinions, prompt authoring for other models, complex computer use (for example redrawing a drawing in Figma), 3D and CAD. |
+| Sol | `gpt-6.1-sol` | 2 / 10 | none, low, medium, high | The strongest GPT-6 model and the default for anything that has to be right: multi-file implementation, debugging, test and lint loops, reviews, architecture reviews and second opinions, prompt authoring for other models, complex computer use (for example redrawing a drawing in Figma), 3D and CAD. |
+| Astra | `gpt-6-astra` | 10 / 50 | low, medium | Only when the user asks for Astra by name. |
 
 Operator notes on each:
 
 - Luna is effectively free. It handles bulk multi-image vision well even at
   effort `none`, and it codes well when the spec is strict and drifts when the
   spec is loose. Run many Luna jobs in parallel rather than one big one.
-- Sol is the reliable, thorough workhorse. Its output is normally ready to
-  review and merge.
-- Astra costs as much as Fable 5.1. Use it sparingly and never above `medium`.
-  Writing prompts for other LLMs and VLMs is its standout strength.
+- Sol 6.1 outperforms Astra (Operator) at a fifth of the price, so it takes
+  every job that used to go to Astra, including writing prompts for other LLMs
+  and VLMs. It is thorough and its output is normally ready to review and
+  merge.
+- Astra costs as much as Fable 5.1 and is weaker than Sol 6.1. Launch it only
+  when the user asks for it by name, and never above `medium`.
 
 Effort:
 
 - Luna: `none` or `low` for lookups, extraction, and bulk vision; `medium` for
   research and coding; `high` only when a `medium` run demonstrably fell short.
   (Verified: Luna accepts `none`.)
-- Sol: `medium` by default, `high` for large multi-part jobs, `low` for small
-  edits.
+- Sol: `medium` by default, `high` for large multi-part jobs, architecture
+  reviews, prompt authoring, and hard computer use, `low` for small edits.
 - Astra: `low` or `medium` (defaults to `medium` when no effort is given).
 - Tighten the brief before raising effort. A sharper contract beats more
   reasoning.
 
-Escalate without asking when output misses the bar: Luna to Sol, Sol to Astra
-or a Claude reviewer. Judge the output, not the price.
+Escalate without asking when output misses the bar: Luna to Sol, Sol to Sol
+at `high` or a Claude reviewer. Do not escalate to Astra unless the user asks
+for it. Judge the output, not the price.
 
 ## What GPT-6 does with a brief
 
@@ -100,7 +103,7 @@ delta name the block it amends. The minimum for any Codex job:
 ```
 
 Add `<grounding>` for research and review, `<delegation>` for large
-decomposable jobs on Sol or Astra, `<vision>` for image work, and
+decomposable jobs on Sol, `<vision>` for image work, and
 `<stop_rules>` for loops. Copy the full text of each block from
 [references/blocks.md](references/blocks.md). Per-model skeletons are in
 [references/recipes.md](references/recipes.md).
@@ -133,7 +136,7 @@ ready.
 7. **Progress.** `<progress_updates>` is present if anyone will watch the job.
 8. **Model fit.** Luna coding needs a spec you could hand to a contractor:
    files, signatures, behaviour, acceptance tests. If you cannot write that
-   spec, the job is Sol's. Astra needs a reason from its column in the table.
+   spec, the job is Sol's. Astra needs the user to have asked for it by name.
 9. **Nothing pasted.** Files and transcripts are referenced by path, not
    copied in. The worker can read them.
 
@@ -163,15 +166,14 @@ criteria, a loop rule ("after every change re-run X before moving on"), and
 a stop rule ("after 3 distinct failed fixes, mark blocked and summarize").
 Goals persist across turns and compaction; steers do not.
 
-## Astra as prompt author
+## Sol as prompt author
 
-Astra writes prompts that other models follow unusually well (Operator). Use
-it at effort `medium` for an LLM or VLM pipeline, a classifier, an extraction
+Sol 6.1 writes the prompts that other models run. Use it at effort `high` for an LLM or VLM pipeline, a classifier, an extraction
 prompt, a Luna fan-out brief that will run thousands of times, or a system
 prompt. Give it the target model and effort, real sample inputs, the failure
 cases you have seen, and the output schema; ask for the prompt plus a test
 set. Validate independently before adopting: the recipe in
-[references/recipes.md](references/recipes.md#astra-prompt-author) says how.
+[references/recipes.md](references/recipes.md#sol-prompt-author) says how.
 
 ## Choose the command
 
@@ -195,6 +197,6 @@ These are companion CLI subcommands, not `/codex:` slash commands; the
   the decision rule instead.
 - Pasting whole files or transcripts instead of paths.
 - Raising effort to rescue a vague brief.
-- Astra for bulk work, or Astra above `medium`.
+- Astra when the user did not ask for it by name, or Astra above `medium`.
 - A steer that restates the whole task. The worker already has it; send the
   delta.

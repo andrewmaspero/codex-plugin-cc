@@ -162,7 +162,8 @@ Examples:
 /codex:rescue investigate why the tests started failing
 /codex:rescue fix the failing test with the smallest safe patch
 /codex:rescue --resume apply the top fix from the last run
-/codex:rescue --model astra --effort medium redesign the retry pipeline across services
+/codex:rescue --model sol --effort high redesign the retry pipeline across services
+/codex:rescue --model astra --effort medium get Astra's second opinion on the retry design
 /codex:rescue --model sol --effort high investigate the flaky integration test
 /codex:rescue --model luna --effort none look up how the config loader resolves paths
 /codex:rescue --background investigate the regression
@@ -177,7 +178,7 @@ Ask Codex to redesign the database connection to be more resilient.
 **Notes:**
 
 - Fresh tasks and reviews default to `gpt-6.1-sol`; set `CODEX_COMPANION_DEFAULT_MODEL` to an alias or model name to override it. A follow-up (`continue` or `task --resume-last`) keeps its thread's model unless you pass `--model`.
-- Models: GPT-6 only. `luna` → `gpt-6-luna` (near-free, fast; bulk, vision, research, strictly specified coding; supports effort `none`), `sol` → `gpt-6.1-sol` (default workhorse for coding and reviews), `astra` → `gpt-6-astra` (frontier, expensive; use sparingly; effort `low` or `medium` only). Any other model is rejected.
+- Models: GPT-6 only. `luna` → `gpt-6-luna` (near-free, fast; bulk, vision, research, strictly specified coding; supports effort `none`), `sol` → `gpt-6.1-sol` (default and strongest: coding, reviews, architecture, computer use), `astra` → `gpt-6-astra` (only on explicit request; Sol 6.1 is stronger; effort `low` or `medium` only). Any other model is rejected.
 - Accepted `--effort` values: `none`, `low`, `medium`, `high`. The general policy ceiling is `high`; `gpt-6-astra` accepts only `low` or `medium` and uses `medium` when effort is omitted.
 - follow-up rescue requests can continue the latest Codex task in the repo
 

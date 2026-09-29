@@ -105,9 +105,9 @@ No praise, no summary of the change.</output_contract>
 Watch for: a summary of the change in place of findings. The output contract
 forbids it; if it appears anyway, steer with "findings only".
 
-## Astra: architecture review or second opinion
+## Sol: architecture review or second opinion
 
-Launch: `--model astra --effort medium --sandbox read-only`.
+Launch: `--model sol --effort high --sandbox read-only`.
 
 Blocks: `<autonomy>`, `<grounding>`.
 
@@ -122,11 +122,11 @@ alternative; what you would not change.</output_contract>
 Watch for: a verdict without a stated decision under review. Name the
 decision, or the review becomes a general survey.
 
-## Astra: prompt author
+## Sol: prompt author
 
-Launch: `--model astra --effort medium --sandbox read-only`.
+Launch: `--model sol --effort high --sandbox read-only`.
 
-Blocks: `<autonomy>` only; Astra runs read-only and returns text.
+Blocks: `<autonomy>` only; Sol runs read-only and returns text.
 
 ```xml
 <task>Write a production prompt for <target model and effort, e.g. gpt-6-luna
@@ -139,7 +139,7 @@ inputs covering the failure cases, with proposed expected outputs. 3) Three
 sentences on the design choices. Nothing else.</output_contract>
 ```
 
-Validate independently; do not trust Astra's own labels:
+Validate independently; do not trust the author's own labels:
 
 1. Check the proposed expected outputs yourself, or with a separate Luna or
    Sol job, before using them.
@@ -147,16 +147,16 @@ Validate independently; do not trust Astra's own labels:
    explicit pass threshold (for example at least 95% schema-valid and 90%
    field-accurate).
 3. Classify each failure before revising: specification, prompt, model,
-   data, or harness. Send only prompt failures back to Astra.
+   data, or harness. Send only prompt failures back to the authoring thread.
 
 Watch for: expected outputs that agree with the prompt's assumptions rather
 than the data. Step 1 exists for that reason.
 
-## Astra: complex computer use
+## Sol: complex computer use
 
 For hard visual reconstruction, such as redrawing a sketch or screenshot as a
-Figma design, or other precise multi-step GUI work. Launch: `--model astra
---effort medium --full`.
+Figma design, or other precise multi-step GUI work. Launch: `--model sol
+--effort high --full`.
 
 Blocks: `<autonomy>`, `<stop_rules>`, `<progress_updates>`.
 
@@ -165,4 +165,5 @@ definition of done ("every element in the reference exists with matching
 position within 8px and matching text"), and the evidence rule (save
 screenshots to `.codex-artifacts/<job-id>/`).
 
-Watch for: routine browser QA landing here. That belongs on Sol or Luna.
+Watch for: routine browser QA landing here. That belongs on Sol at `medium`
+or on Luna.
