@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { spawn } from "node:child_process";
+import { runWithCompletionGuard, MAX_AUTO_CONTINUES } from "./lib/task-completion.mts";
 import type { StdioOptions } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -201,7 +202,7 @@ function printUsage() {
       "  node scripts/codex-companion.mts setup [--enable-review-gate|--disable-review-gate] [--sandbox <read-only|write|full|clear>] [--statusline] [--json]",
       "  node scripts/codex-companion.mts review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>]",
       "  node scripts/codex-companion.mts adversarial-review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [focus text]",
-      "  node scripts/codex-companion.mts task [--background] [--write|--full|--sandbox <mode>] [--worktree|--worktree-name <name>] [--goal <objective>] [--goal-budget <tokens>] [--resume-last|--resume|--fresh] [--model <luna|sol|astra>] [--effort <none|low|medium|high>] [prompt]",
+      "  node scripts/codex-companion.mts task [--background] [--no-auto-continue] [--write|--full|--sandbox <mode>] [--worktree|--worktree-name <name>] [--goal <objective>] [--goal-budget <tokens>] [--resume-last|--resume|--fresh] [--model <luna|sol|astra>] [--effort <none|low|medium|high>] [prompt]",
       "  node scripts/codex-companion.mts transfer [--source <claude-jsonl>] [--json]",
       "  node scripts/codex-companion.mts status [job-id] [--all] [--wait] [--timeout-ms <ms, 0 = until done>] [--poll-interval-ms <ms>] [--json]",
       "  node scripts/codex-companion.mts wait <job-id> [--timeout <seconds>]",
@@ -979,18 +980,29 @@ async function executeTaskRun(request) {
     throw new Error("Provide a prompt, a prompt file, piped stdin, or use --resume-last.");
   }
 
-  const result = await runAppServerTurn(request.cwd, {
-      resumeThreadId,
-      prompt: request.prompt,
+  const result = await runWithCompletionGuard((followUp) => runAppServerTurn(request.cwd, {
+      resumeThreadId: followUp?.threadId ?? resumeThreadId,
+      prompt: followUp?.prompt ?? request.prompt,
       defaultPrompt: resumeThreadId ? DEFAULT_CONTINUE_PROMPT : "",
       model: request.model,
       effort: request.effort,
       sandbox: request.sandbox ?? (request.write ? "workspace-write" : "read-only"),
-      goal: request.goal ?? null,
+      goal: followUp ? null : request.goal ?? null,
       onRuntimeEndpoint,
       onProgress: request.onProgress,
       persistThread: true,
       threadName: resumeThreadId ? null : buildPersistentTaskThreadName(request.prompt || DEFAULT_CONTINUE_PROMPT)
+  }), {
+    enabled: Boolean(request.autoContinue) && !resumeThreadId,
+    prompt: request.prompt,
+    onRecovery: (attempt, previous) => {
+      request.onProgress?.({ message: `Auto-continue ${attempt}/${MAX_AUTO_CONTINUES}: suspect_early_completion on ${previous.threadId}; continuing the unmet output contract.`, phase: "running" });
+      if (request.jobId) upsertJob(jobStateRoot, { id: request.jobId, autoContinueCount: attempt });
+    },
+    onExhausted: () => {
+      request.onProgress?.({ message: "suspect_early_completion: auto-continue limit reached; job will fail rather than report completed.", phase: "failed" });
+      if (request.jobId) upsertJob(jobStateRoot, { id: request.jobId, suspectEarlyCompletion: true });
+    }
   });
 
   const rawOutput = typeof result.finalMessage === "string" ? result.finalMessage : "";
@@ -1017,7 +1029,8 @@ async function executeTaskRun(request) {
     touchedFiles: result.touchedFiles,
     reasoningSummary: result.reasoningSummary,
     sandbox: request.sandbox ?? (request.write ? "workspace-write" : "read-only"),
-    worktree: request.worktree ?? null
+    worktree: request.worktree ?? null,
+    ...(result.suspectEarlyCompletion ? { suspectEarlyCompletion: true } : {})
   };
 
   return {
@@ -1141,7 +1154,7 @@ function setupJobWorktree(cwd, job, options) {
   };
 }
 
-function buildTaskRequest({ cwd, workspaceRoot = null, model, effort, prompt, write, sandbox = null, worktree = null, goal = null, resumeLast, resumeThreadId = null, jobId }) {
+function buildTaskRequest({ cwd, workspaceRoot = null, model, effort, prompt, write, sandbox = null, worktree = null, goal = null, resumeLast, resumeThreadId = null, autoContinue = false, jobId }) {
   return {
     cwd,
     workspaceRoot,
@@ -1154,6 +1167,7 @@ function buildTaskRequest({ cwd, workspaceRoot = null, model, effort, prompt, wr
     goal,
     resumeLast,
     resumeThreadId,
+    autoContinue,
     jobId
   };
 }
@@ -1412,7 +1426,7 @@ async function handleReview(argv) {
 async function handleTask(argv) {
   const { options, positionals } = parseCommandInput(argv, {
     valueOptions: ["model", "effort", "cwd", "prompt-file", "sandbox", "worktree-name", "goal", "goal-file", "goal-budget"],
-    booleanOptions: ["json", "write", "full", "worktree", "resume-last", "resume", "fresh", "background", "prompt-stdin"],
+    booleanOptions: ["json", "write", "full", "worktree", "resume-last", "resume", "fresh", "background", "prompt-stdin", "no-auto-continue"],
     aliasMap: {
       m: "model"
     }
@@ -1454,6 +1468,7 @@ async function handleTask(argv) {
     worktree: worktreeSetup.worktree,
     goal: resolveGoalOption(cwd, options),
     resumeLast,
+    autoContinue: !options["no-auto-continue"] && !resumeLast,
     jobId: job.id
   });
 

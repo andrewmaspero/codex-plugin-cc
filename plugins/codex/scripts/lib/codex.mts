@@ -148,6 +148,8 @@ interface TurnCaptureState {
   activeSubagentTurns: Set<string>;
   completionTimer: ReturnType<typeof setTimeout> | null;
   lastAgentMessage: string;
+  delegationObserved: boolean;
+  confirmTerminalTurn: (() => Promise<Turn | null>) | null;
   reviewText: string;
   reasoningSummary: string[];
   error: unknown;
@@ -479,6 +481,8 @@ function createTurnCaptureState(threadId: string, options: { onProgress?: Progre
     activeSubagentTurns: new Set(),
     completionTimer: null,
     lastAgentMessage: "",
+    delegationObserved: false,
+    confirmTerminalTurn: null,
     reviewText: "",
     reasoningSummary: [],
     error: null,
@@ -517,7 +521,7 @@ function completeTurn(state, turn = null, options: CompleteTurnOptions = {}) {
   }
 
   if (options.inferred) {
-    emitProgress(state.onProgress, "Turn completion inferred after the main thread finished and subagent work drained.", "finalizing");
+    emitProgress(state.onProgress, "Turn completion inferred after confirming the main turn is terminal in thread state.", "finalizing");
   }
 
   state.resolveCompletion(state);
@@ -547,7 +551,7 @@ function scheduleInferredCompletion(state) {
   }
 
   clearCompletionTimer(state);
-  state.completionTimer = setTimeout(() => {
+  state.completionTimer = setTimeout(async () => {
     state.completionTimer = null;
     if (state.completed || state.finalTurn || !state.finalAnswerSeen) {
       return;
@@ -555,7 +559,18 @@ function scheduleInferredCompletion(state) {
     if (state.pendingCollaborations.size > 0 || state.activeSubagentTurns.size > 0) {
       return;
     }
-    completeTurn(state, null, { inferred: true });
+    // A final_answer item is not an authoritative turn boundary. In current
+    // CLI versions async questions use that phase too, and native delegation
+    // does not expose child turn lifecycle events on this stream.
+    const expectedTurnId = state.turnId;
+    try {
+      const turn = await state.confirmTerminalTurn?.();
+      if (turn && !state.completed && state.finalAnswerSeen && state.turnId === expectedTurnId) {
+        completeTurn(state, turn, { inferred: true });
+      }
+    } catch {
+      // Keep streaming; turn/completed or the idle reconciler will settle it.
+    }
   }, 250);
   state.completionTimer.unref?.();
 }
@@ -643,8 +658,21 @@ function scheduleAdoptedCompletion(state, turn) {
   state.completionTimer.unref?.();
 }
 
+export function isAsyncAgentMessage(item) {
+  return item?.type === "agentMessage" && (item.delivery === "async" || Boolean(item.questions?.length));
+}
+
 function recordItem(state, item, lifecycle, threadId = null) {
+  const isRoot = !threadId || threadId === state.threadId;
+  if (item.type === "subAgentActivity") {
+    registerThread(state, item.agentThreadId);
+    if (isRoot) state.delegationObserved = true;
+    if (lifecycle === "completed") {
+      emitProgress(state.onProgress, `Native subagent ${item.agentPath ?? item.agentThreadId}: ${item.kind}.`, "running");
+    }
+  }
   if (item.type === "collabAgentToolCall") {
+    if (isRoot && (item.receiverThreadIds?.length || item.tool === "spawnAgent")) state.delegationObserved = true;
     if (!threadId || threadId === state.threadId) {
       if (lifecycle === "started" || item.status === "inProgress") {
         state.pendingCollaborations.add(item.id);
@@ -665,7 +693,11 @@ function recordItem(state, item, lifecycle, threadId = null) {
       text: item.text ?? ""
     });
     if (item.text) {
-      if (!threadId || threadId === state.threadId) {
+      if (isRoot && isAsyncAgentMessage(item)) {
+        state.finalAnswerSeen = false;
+        clearCompletionTimer(state);
+      }
+      if (isRoot && !isAsyncAgentMessage(item)) {
         state.lastAgentMessage = item.text;
         if (lifecycle === "completed" && item.phase === "final_answer") {
           state.finalAnswerSeen = true;
@@ -677,7 +709,7 @@ function recordItem(state, item, lifecycle, threadId = null) {
         emitLogEvent(state.onProgress, {
           message: sourceLabel ? `Subagent ${sourceLabel}: ${shorten(item.text, 96)}` : `Assistant message captured: ${shorten(item.text, 96)}`,
           stderrMessage: null,
-          phase: item.phase === "final_answer" ? "finalizing" : null,
+          phase: isAsyncAgentMessage(item) ? "running" : item.phase === "final_answer" ? "finalizing" : null,
           logTitle: sourceLabel ? `Subagent ${sourceLabel} message` : "Assistant message",
           logBody: item.text
         });
@@ -861,7 +893,7 @@ function startIdleReconciler(client, state, idleMs, getLastEventAt) {
       if (!latest || !TERMINAL_TURN_STATUSES.has(status)) {
         return;
       }
-      const lastAgent = [...(latest.items ?? [])].reverse().find((item) => item?.type === "agentMessage" && item.text);
+      const lastAgent = [...(latest.items ?? [])].reverse().find((item) => item?.type === "agentMessage" && item.text && !isAsyncAgentMessage(item));
       if (lastAgent) {
         state.lastAgentMessage = lastAgent.text;
         state.messages.push({ lifecycle: "completed", phase: lastAgent.phase ?? null, text: lastAgent.text });
@@ -889,6 +921,13 @@ async function captureTurn(
   options: CaptureTurnOptions = {}
 ) {
   const state = createTurnCaptureState(threadId, options);
+  state.confirmTerminalTurn = async () => {
+    const response = await client.request("thread/turns/list", {
+      threadId, cursor: null, limit: 1, sortDirection: "desc", itemsView: "full"
+    });
+    const latest = response?.data?.[0];
+    return latest?.id === state.turnId && TERMINAL_TURN_STATUSES.has(extractTurnStatus(latest)) ? latest : null;
+  };
   const previousHandler = client.notificationHandler;
   let lastEventAt = Date.now();
   const idleReconciler = startIdleReconciler(client, state, resolveIdleReconcileMs(options), () => lastEventAt);
@@ -933,6 +972,12 @@ async function captureTurn(
     }
 
     if (!state.turnId) {
+      // Labels can precede turn/started, whose handler streams subsequent
+      // items immediately even before turn/start's response is processed.
+      if (message.method === "thread/started" || message.method === "thread/name/updated") {
+        applyTurnNotification(state, message);
+        return;
+      }
       if (isRootTurnStarted(state, message)) {
         captureRootTurnStarted(state, message);
         applyTurnNotification(state, message);
@@ -1847,6 +1892,7 @@ export async function runAppServerTurn(cwd, options: RunAppServerTurnOptions = {
       threadId,
       turnId: turnState.turnId,
       finalMessage: turnState.lastAgentMessage,
+      delegationObserved: turnState.delegationObserved,
       reasoningSummary: turnState.reasoningSummary,
       turn: turnState.finalTurn,
       error: turnState.error,

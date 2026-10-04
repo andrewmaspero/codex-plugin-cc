@@ -535,6 +535,46 @@ rl.on("line", (line) => {
         });
         saveState(state);
 
+        if (BEHAVIOR.startsWith("async-delegation-")) {
+          const mode = BEHAVIOR.slice("async-delegation-".length);
+          const storedTurn = thread.turns[thread.turns.length - 1];
+          storedTurn.status = "inProgress";
+          saveState(state);
+          send({ method: "turn/started", params: { threadId: thread.id, turn: buildTurn(turnId) } });
+          const emit = (lifecycle, item) => send({ method: "item/" + lifecycle, params: { threadId: thread.id, turnId, item } });
+          emit("completed", { type: "subAgentActivity", id: "native_" + turnId, kind: "started", agentThreadId: "child", agentPath: "/root/child" });
+          const wait = { type: "collabAgentToolCall", id: "wait_" + turnId, tool: "wait", status: "inProgress", receiverThreadIds: ["child"] };
+          if (mode === "wait") emit("started", wait);
+          emit("completed", { type: "agentMessage", id: "async_" + turnId, phase: "final_answer", delivery: mode === "sync-live" || mode === "questions-only" ? null : "async", questions: mode === "sync-live" ? null : [{ title: "No response is needed; I am proceeding.", options: null }], text: "No response is needed; I am proceeding." });
+          if (mode === "drained") {
+            emit("started", wait);
+            emit("completed", { ...wait, status: "completed" });
+          }
+          setTimeout(() => {
+            if (mode === "wait") emit("completed", { ...wait, status: "completed" });
+            fs.writeFileSync(path.join(thread.cwd, "verified.txt"), "verified");
+            storedTurn.status = "completed";
+            saveState(state);
+            emit("completed", { type: "agentMessage", id: "real_" + turnId, phase: "final_answer", text: "All deliverables exist and verification passed." });
+            send({ method: "turn/completed", params: { threadId: thread.id, turn: buildTurn(turnId, "completed") } });
+          }, 900);
+          break;
+        }
+        if (BEHAVIOR.startsWith("early-contract-")) {
+          const suspect = BEHAVIOR === "early-contract-always" || thread.turns.length === 1;
+          const final = suspect ? "No response is needed; I am proceeding with the task." : "All deliverables exist and verification passed.";
+          if (!suspect) fs.writeFileSync(path.join(thread.cwd, "verified.txt"), "verified");
+          thread.turns[thread.turns.length - 1].items[1].text = final;
+          saveState(state);
+          send({ method: "turn/started", params: { threadId: thread.id, turn: buildTurn(turnId) } });
+          send({ method: "item/completed", params: { threadId: thread.id, turnId, item: { type: "subAgentActivity", id: "native_" + turnId, kind: "started", agentThreadId: "child", agentPath: "/root/child" } } });
+          if (BEHAVIOR === "early-contract-drained") {
+            send({ method: "item/completed", params: { threadId: thread.id, turnId, item: { type: "collabAgentToolCall", id: "wait_" + turnId, tool: "wait", status: "completed", receiverThreadIds: ["child"], agentsStates: { child: { status: "completed" } } } } });
+          }
+          emitTurnCompleted(thread.id, turnId, [{ completed: { type: "agentMessage", id: "msg_" + turnId, text: final, phase: "final_answer" } }]);
+          break;
+        }
+
         if (BEHAVIOR === "no-turn-events" || BEHAVIOR === "interrupted-no-events") {
           // Model an event stream that silently drops every notification for
           // the turn: the turn is recorded as completed in thread state (so

@@ -12,7 +12,7 @@ import path from "node:path";
 import process from "node:process";
 
 import { BROKER_BUSY_RPC_CODE, CodexAppServerClient } from "./app-server.mts";
-import { requestThreadGoal, steerAppServerTurn } from "./codex.mts";
+import { isAsyncAgentMessage, requestThreadGoal, steerAppServerTurn } from "./codex.mts";
 import { listJobs, readJobFile, resolveJobFile, resolveJobFileGlobally, updateState, upsertJob, writeJobFile } from "./state.mts";
 import type { JobFilePayload, JobRecord } from "./state.mts";
 import { enrichJob, reapOrphanedJobs, sortJobsNewestFirst } from "./job-control.mts";
@@ -503,7 +503,7 @@ export function compactItem(item, textLimit = 400) {
     case "userMessage":
       return { ...base, text: shorten(extractUserText(item), textLimit) };
     case "agentMessage":
-      return { ...base, phase: item.phase ?? null, text: shorten(item.text, textLimit) };
+      return { ...base, phase: item.phase ?? null, delivery: item.delivery ?? null, questions: item.questions?.map(q => ({ title: shorten(q.title, textLimit), options: q.options })) ?? null, text: shorten(item.text, textLimit) };
     case "reasoning": {
       const summary = Array.isArray(item.summary)
         ? item.summary.map((part) => part?.text ?? "").join(" ")
@@ -529,6 +529,8 @@ export function compactItem(item, textLimit = 400) {
       return { ...base, status: item.status ?? null, tool: item.tool ?? null };
     case "collabAgentToolCall":
       return { ...base, status: item.status ?? null, tool: item.tool ?? null, subagents: item.receiverThreadIds ?? [] };
+    case "subAgentActivity":
+      return { ...base, kind: item.kind, agentThreadId: item.agentThreadId, agentPath: item.agentPath };
     case "webSearch":
       return { ...base, query: shorten(item.query, 120) };
     case "enteredReviewMode":
@@ -1063,7 +1065,7 @@ export async function reconcileCompletedTurnJobs(cwd, jobs: JobRecord[], options
           continue;
         }
       }
-      const lastAgent = [...(outcome.items ?? [])].reverse().find((item) => item?.type === "agentMessage" && item.text);
+      const lastAgent = [...(outcome.items ?? [])].reverse().find((item) => item?.type === "agentMessage" && item.text && !isAsyncAgentMessage(item));
       if (finalizeReconciledJob(workspaceRoot, job, outcome, status, lastAgent?.text ?? null, activityMs)) {
         reconciled.push({ jobId: job.id, threadId: job.threadId, turnId: outcome.id, turnStatus: status });
       }
@@ -1099,6 +1101,12 @@ export function buildJobAlerts(job: JobRecord, options: BuildJobAlertsOptions = 
     job.logFile && fs.existsSync(job.logFile)
       ? fs.readFileSync(job.logFile, "utf8").split(/\r?\n/).filter(Boolean)
       : [];
+
+  if (job.suspectEarlyCompletion || (job.result as { suspectEarlyCompletion?: boolean } | null)?.suspectEarlyCompletion) {
+    alerts.push({ jobId: job.id, kind: "suspect_early_completion",
+      evidence: "The delegated task still returned a conversational continuation after two automatic recovery turns; its output contract is unconfirmed.",
+      suggestedAction: `Inspect /codex:items ${job.threadId} and the deliverables, then use /codex:continue ${job.threadId} with the missing work.` });
+  }
 
   if (job.status === "failed" || job.status === "interrupted") {
     const completedAt = Date.parse(job.completedAt ?? job.updatedAt ?? "");
@@ -1228,7 +1236,8 @@ async function collectGoalAlerts(cwd, jobs) {
 }
 
 export async function buildAlertsSnapshot(cwd, reference = "", options: BuildAlertsSnapshotOptions = {}) {
-  const workspaceRoot = resolveWorkspaceRoot(cwd);
+  const globalMatch = reference ? resolveJobFileGlobally(cwd, reference) : null;
+  const workspaceRoot = globalMatch?.job?.workspaceRoot ?? resolveWorkspaceRoot(cwd);
   // Reap dead workers before building alerts so an orphan surfaces as a
   // terminal "failed" alert (and status pollers stop waiting on it) instead
   // of an advisory on a job that still claims to be running.
@@ -1243,7 +1252,7 @@ export async function buildAlertsSnapshot(cwd, reference = "", options: BuildAle
   }
 
   const scoped = reference
-    ? jobs.filter((job) => job.id === reference || job.id.startsWith(reference))
+    ? globalMatch ? [readJobFile(globalMatch.jobFile)] : jobs.filter((job) => job.id === reference || job.id.startsWith(reference))
     : jobs.filter((job) => job.status === "queued" || job.status === "running" || job.status === "failed" || job.status === "interrupted");
 
   if (reference && scoped.length === 0) {

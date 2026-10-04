@@ -181,6 +181,8 @@ Ask Codex to redesign the database connection to be more resilient.
 - Models: GPT-6 only. `luna` → `gpt-6-luna` (near-free, fast; bulk, vision, research, strictly specified coding; supports effort `none`), `sol` → `gpt-6.1-sol` (default and strongest: coding, reviews, architecture, computer use), `astra` → `gpt-6-astra` (only on explicit request; Sol 6.1 is stronger; effort `low` or `medium` only). Any other model is rejected.
 - Accepted `--effort` values: `none`, `low`, `medium`, `high`. The general policy ceiling is `high`; `gpt-6-astra` accepts only `low` or `medium` and uses `medium` when effort is omitted.
 - follow-up rescue requests can continue the latest Codex task in the repo
+- Async questions (including `agentMessage` items with `phase: final_answer` and `delivery: async`) are progress within a live turn. The companion waits for server-confirmed completion.
+- Fresh companion `task` jobs with delegation and an explicit `<output_contract>` automatically continue a short final that says work is still proceeding, at most twice on the same thread. Logs show `Auto-continue N/2`; exhaustion fails the job with a `suspect_early_completion` alert. Pass `task --no-auto-continue` to disable recovery. Reviews, explicit `continue`, and resumed tasks retain their completion behavior. Prose contracts still require checking the actual deliverables.
 
 ### `/codex:transfer`
 
