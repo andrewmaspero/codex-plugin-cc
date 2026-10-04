@@ -1,9 +1,6 @@
 --- a/skills/gpt-6-prompting/references/blocks.md
 +++ b/skills/gpt-6-prompting/references/blocks.md
-@@ -134,6 +134,14 @@
- Parallelize by delegating independent subtasks to subagents when it saves
- time or improves quality. Give each subagent a self-contained brief with its
- own scope and output contract. You own integration and final verification.
+@@ -136,0 +137,8 @@
 +Keep track of every delegated task. While useful independent work remains,
 +continue it; otherwise use the available collaboration wait tool until every
 +delegated task has finished. A wait timeout or mailbox update does not mean
@@ -12,15 +9,9 @@
 +when every output-contract deliverable exists and verification passes.
 +Use commentary for progress. Do not send optional async questions just to
 +announce that you are proceeding; no user answer is required for this job.
- </delegation>
- ```
- 
 --- a/skills/codex-orchestrator/SKILL.md
 +++ b/skills/codex-orchestrator/SKILL.md
-@@ -155,6 +155,13 @@
-   gets its own, so every job stays steerable. For one big decomposable job,
-   prefer a single Sol job at `high` with an explicit `<delegation>` block;
-   GPT-6 under-delegates unless told to.
+@@ -157,0 +158,7 @@
 +  Allow Sol to use its own subagents. The parent owns integration and final
 +  verification; the delegation brief must require waiting for all dispatched
 +  tasks before the final answer. Keep an explicit `<output_contract>`.
@@ -28,13 +19,7 @@
 +  Fresh `task` jobs recover short conversational early finals up to twice;
 +  the watcher log includes `Auto-continue N/2`. `--no-auto-continue` disables
 +  this recovery; explicit `continue`/resume jobs and reviews do not recover.
- 
- ## Goals For Long Loops
- 
-@@ -224,6 +231,19 @@
- - Codex missing or unauthenticated: stop and tell the user to run `/codex:setup`.
- - Correcting a running job, in order: steer; wait if the direction is fine;
-   cancel and relaunch; `continue` after completion.
+@@ -226,0 +234,13 @@
 +- A delegated job returning “No response is needed” or “I am proceeding” is
 +  suspect. Read `alerts <jobId>`, `tail <jobId>`, `turns <threadId>`, then a
 +  bounded `items <threadId> --turn <turnId> --budget 6000` slice. An
@@ -48,6 +33,3 @@
 +  omissions and verification requirement. Preserve delegation. After the
 +  default two recoveries, `suspect_early_completion` marks failure and needs
 +  controller inspection; a long final is still subject to artifact checks.
- 
- ## References
- 

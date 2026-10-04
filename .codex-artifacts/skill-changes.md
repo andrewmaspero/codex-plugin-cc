@@ -1,6 +1,6 @@
 # Proposed skill changes (2026-10-04)
 
-Only proposals; no skill source or installed skill was modified. Companion 1.11.1 fixes async-question completion classification; wait guidance is coordination advice, not a substitute for the protocol fix.
+Only proposals; no skill source or installed skill was modified. The companion patch file uses zero context; review it with this before/after text and apply with `git apply --unidiff-zero skill-changes.patch` from the skills repository. Companion 1.11.1 fixes async-question completion classification; wait guidance is coordination advice, not a substitute for the protocol fix.
 
 ## gpt-6-prompting/references/blocks.md
 
