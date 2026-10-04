@@ -86,7 +86,10 @@ item 3: …") and the result easy to audit.
 
 Watch for: tests written for trivial changes, and serial work on a job that
 could have been split. Both are handled by the named blocks; check they are
-present.
+present. A delegating job whose result is one conversational line ("No
+response is needed; I'm proceeding") is an early final: companion 1.11.1
+auto-continues it up to twice, and `codex-orchestrator` (Delegation And
+Parallel Tracks) says how to check the thread before recovering by hand.
 
 ## Sol: review
 

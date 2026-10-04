@@ -21,7 +21,7 @@ Three kinds of claim appear here, and the label says how far to trust each.
 
 - **OpenAI:** documented in the [GPT-6 model guide](https://developers.openai.com/api/docs/guides/latest-model).
 - **Verified:** observed in live Codex runs on 25 September 2026 with plugin
-  1.9.0.
+  1.9.0; delegation behaviour on 4 October 2026 with plugin 1.11.1.
 - **Operator:** the owner's experience across many jobs. A working default,
   not a benchmark.
 
@@ -75,7 +75,7 @@ block in [references/blocks.md](references/blocks.md) that handles each one.
 | Fills routine gaps but guesses or skips consequential ones. Luna is the most literal of the three. | Operator | `<task>`, `<scope>` |
 | Writes Markdown lists and tables by default, with stock phrases. | OpenAI | `<output_contract>` |
 | Over-tests small changes and runs broader verification than the change needs. | OpenAI | `<verification>` |
-| Delegates to its own subagents less than it should, so decomposable work runs serially. | OpenAI | `<delegation>` |
+| Delegates to its own subagents less than it should, so decomposable work runs serially. Once delegating, it may post an optional async status ("No response is needed; I'm proceeding") instead of waiting. | OpenAI; Verified | `<delegation>` |
 | Says almost nothing while it works. Codex runs GPT-6 at low verbosity, so the log shows only commands. | Verified | `<progress_updates>` |
 
 Two consequences that are easy to miss:
@@ -103,8 +103,9 @@ delta name the block it amends. The minimum for any Codex job:
 ```
 
 Add `<grounding>` for research and review, `<delegation>` for large
-decomposable jobs on Sol, `<vision>` for image work, and
-`<stop_rules>` for loops. Copy the full text of each block from
+decomposable jobs on Sol (companion 1.11.1 or later; older versions reported
+a delegating job complete while its parent was still working), `<vision>`
+for image work, and `<stop_rules>` for loops. Copy the full text of each block from
 [references/blocks.md](references/blocks.md). Per-model skeletons are in
 [references/recipes.md](references/recipes.md).
 
