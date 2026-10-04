@@ -127,13 +127,23 @@ names. Prefer primary sources (vendor docs, source code, release notes).
 
 ## delegation
 
-Handles: under-delegating (OpenAI). Only for large decomposable jobs on Sol.
+Handles: under-delegating (OpenAI), and posting an optional "I'm proceeding"
+status instead of waiting for its subagents (Verified, 4 October 2026).
+Only for large decomposable jobs on Sol, and only with companion 1.11.1 or
+later, which stops treating that status as the end of the turn.
 
 ```xml
 <delegation>
 Parallelize by delegating independent subtasks to subagents when it saves
 time or improves quality. Give each subagent a self-contained brief with its
-own scope and output contract. You own integration and final verification.
+own scope and output contract. Track every task you delegate. While
+independent work remains, do it; when none remains, wait for all outstanding
+delegated tasks with the collaboration wait tool. A wait timeout or an
+incoming update is not completion. Subagent results are inputs: read them,
+integrate them, then run the final verification yourself. End the turn only
+when every deliverable in the output contract exists and verification
+passes. Report progress as commentary; never send an optional async question
+just to say you are proceeding, because nobody will answer it.
 </delegation>
 ```
 

@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.11.2 (fork)
+
+- Synced the internal `gpt-6-prompting` skill with the canonical codex-skills version: the `<delegation>` block now tells Sol to track and wait for its subagents instead of posting an optional "I'm proceeding" status, and the skill and recipes note that delegation needs companion 1.11.1 or later, which auto-continues an early final.
+
 ## 1.11.0 (fork)
 
 Sol 6.1.
