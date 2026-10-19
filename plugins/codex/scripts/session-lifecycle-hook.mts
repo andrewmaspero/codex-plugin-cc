@@ -18,6 +18,7 @@ import { loadState, resolveStateFile, updateState } from "./lib/state.mts";
 import { consumeVisibilityMarkers, renderVisibilityAdditionalContext } from "./lib/native-visibility.mts";
 import { TRANSCRIPT_PATH_ENV } from "./lib/claude-session-transfer.mts";
 import { resolveWorkspaceRoot } from "./lib/workspace.mts";
+import { isRunningInT3Code, T3_CODE_SESSION_NOTICE } from "./lib/t3-code.mts";
 
 export const SESSION_ID_ENV = "CODEX_COMPANION_SESSION_ID";
 const PLUGIN_DATA_ENV = "CLAUDE_PLUGIN_DATA";
@@ -117,10 +118,11 @@ function handleSessionStart(input) {
   appendEnvVar(TRANSCRIPT_PATH_ENV, input.transcript_path);
   appendEnvVar(PLUGIN_DATA_ENV, process.env[PLUGIN_DATA_ENV]);
   const cwd = input.cwd || process.env.CLAUDE_PROJECT_DIR || process.cwd();
-  const context = renderVisibilityAdditionalContext(
+  const visibility = renderVisibilityAdditionalContext(
     consumeVisibilityMarkers(cwd, { sessionId: input.session_id || process.env[SESSION_ID_ENV] || null })
   );
-  emitAdditionalContext("SessionStart", context);
+  const t3Notice = isRunningInT3Code() ? T3_CODE_SESSION_NOTICE : "";
+  emitAdditionalContext("SessionStart", [t3Notice, visibility].filter(Boolean).join("\n\n"));
 }
 
 async function handleSessionEnd(input) {

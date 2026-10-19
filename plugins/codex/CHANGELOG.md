@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.12.0 (fork)
+
+T3 Code routing.
+
+- Inside T3 Code (detected by `T3CODE_CLI_PATH` or the `com.t3tools.t3code` bundle id), the SessionStart hook adds a short notice to the session: send Codex work through T3's orchestrator (`orchestrator_capabilities`, then `delegate_task` on the Codex provider, tracked with `task_status`/`task_cancel`), and do not use the companion, the `codex-rescue` subagent, or `/codex:*` commands unless the user asks for them. Outside T3 nothing changes.
+- The `codex-rescue` description now says not to use it inside T3 Code.
+- Tests strip the T3 variables from the inherited environment, so the suite behaves the same when it runs inside T3.
+
 ## 1.11.0 (fork)
 
 Sol 6.1.
