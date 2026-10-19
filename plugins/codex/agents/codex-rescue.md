@@ -1,6 +1,6 @@
 ---
 name: codex-rescue
-description: Proactively use when Claude Code is stuck, wants a second implementation or diagnosis pass, needs a deeper root-cause investigation, or should hand a substantial coding task to Codex through the shared runtime
+description: Proactively use when Claude Code is stuck, wants a second implementation or diagnosis pass, needs a deeper root-cause investigation, or should hand a substantial coding task to Codex through the shared runtime. Not inside T3 Code: there, delegate to Codex with the t3-code delegate_task tool instead, unless the user asks for this subagent by name
 model: sonnet
 tools: Bash
 skills:

@@ -718,6 +718,29 @@ test("session start hook exports the Claude session id, transcript path, and plu
   );
 });
 
+test("session start hook points the model at T3's orchestrator only inside T3 Code", () => {
+  const repo = makeTempDir();
+  const input = JSON.stringify({ hook_event_name: "SessionStart", session_id: "sess-t3", cwd: repo });
+  const contextOf = (extraEnv) => {
+    const result = run("node", [SESSION_HOOK, "SessionStart"], {
+      cwd: repo,
+      env: { ...testBaseEnv(), CLAUDE_ENV_FILE: "", ...extraEnv },
+      input
+    });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim() ? JSON.parse(result.stdout).hookSpecificOutput.additionalContext : "";
+  };
+
+  assert.equal(contextOf({}), "");
+  for (const extraEnv of [{ T3CODE_CLI_PATH: "/tmp/t3" }, { __CFBundleIdentifier: "com.t3tools.t3code" }]) {
+    const context = contextOf(extraEnv);
+    assert.match(context, /inside T3 Code/);
+    assert.match(context, /delegate_task/);
+    assert.match(context, /codex:codex-rescue/);
+  }
+  assert.equal(contextOf({ __CFBundleIdentifier: "com.apple.Terminal" }), "");
+});
+
 test("write task output focuses on the Codex result without generic follow-up hints", () => {
   const repo = makeTempDir();
   const binDir = makeTempDir();

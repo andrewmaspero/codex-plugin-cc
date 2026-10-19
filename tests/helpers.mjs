@@ -64,7 +64,11 @@ delete process.env.CLAUDE_PLUGIN_DATA;
 delete process.env.CODEX_COMPANION_SESSION_ID;
 
 export function testBaseEnv() {
-  return { ...process.env };
+  // Tests must not change behaviour when the suite itself runs inside T3 Code.
+  const env = { ...process.env };
+  delete env.T3CODE_CLI_PATH;
+  delete env.__CFBundleIdentifier;
+  return env;
 }
 
 export function writeExecutable(filePath, source) {
