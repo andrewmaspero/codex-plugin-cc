@@ -37,6 +37,7 @@ const PLUGIN_MANIFEST = JSON.parse(fs.readFileSync(PLUGIN_MANIFEST_URL, "utf8"))
 
 export const BROKER_ENDPOINT_ENV = "CODEX_COMPANION_APP_SERVER_ENDPOINT";
 export const BROKER_BUSY_RPC_CODE = -32001;
+export const NO_BROKER_ERROR_CODE = "ENOBROKER";
 export const DISABLE_TURN_HOOK_ENV = "CODEX_COMPANION_DISABLE_TURN_HOOK";
 
 const TURN_COMPLETE_HOOK_URL = new URL("../turn-complete-hook.mts", import.meta.url);
@@ -430,6 +431,11 @@ export class CodexAppServerClient {
       const client = new BrokerCodexAppServerClient(cwd, { ...options, brokerEndpoint });
       await client.initialize();
       return client;
+    }
+    if (options.requireBroker) {
+      throw Object.assign(new Error(`unreachable: no broker for this job's workspace (${cwd}).`), {
+        code: NO_BROKER_ERROR_CODE
+      });
     }
 
     const client = new SpawnedCodexAppServerClient(cwd, options);

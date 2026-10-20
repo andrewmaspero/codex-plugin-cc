@@ -83,6 +83,7 @@ import {
   renderTurnList,
   setGoal,
   showGoal,
+  jobRuntimeCwd,
   steerJob,
   tailJobLog,
   validateGoalObjective
@@ -1767,9 +1768,12 @@ async function handleCancel(argv) {
   const turnId = existing.turnId ?? job.turnId ?? null;
 
   // Worktree jobs run (and register their broker) under their own cwd; jobs
-  // that fell back to a dedicated broker record its endpoint.
-  const brokerEndpoint = existing.brokerEndpoint ?? job.brokerEndpoint ?? null;
-  const interrupt = await interruptAppServerTurn(existing.runCwd ?? job.runCwd ?? cwd, { threadId, turnId, brokerEndpoint });
+  // that fell back to a dedicated broker record its endpoint. Resolve the
+  // runtime from the job, never from the caller's cwd: a cancel issued from
+  // another workspace must still reach the broker that holds the turn.
+  const brokerEndpoint = job.brokerEndpoint ?? existing.brokerEndpoint ?? null;
+  const runtimeCwd = jobRuntimeCwd({ ...existing, ...job }, workspaceRoot);
+  const interrupt = await interruptAppServerTurn(runtimeCwd, { threadId, turnId, brokerEndpoint });
   if (interrupt.attempted) {
     appendLogLine(
       job.logFile,
@@ -1819,7 +1823,8 @@ async function handleCancel(argv) {
     status: "cancelled",
     title: job.title,
     turnInterruptAttempted: interrupt.attempted,
-    turnInterrupted: interrupt.interrupted
+    turnInterrupted: interrupt.interrupted,
+    turnInterruptDetail: interrupt.interrupted ? null : interrupt.detail ?? null
   };
 
   outputCommandResult(payload, renderCancelReport(nextJob), options.json);

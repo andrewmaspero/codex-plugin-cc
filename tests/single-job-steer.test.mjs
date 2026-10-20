@@ -120,6 +120,10 @@ test("steer failure classification names the actual cause", () => {
   );
   assert.equal(classifySteerFailure(Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" })), "unreachable");
   assert.equal(classifySteerFailure(Object.assign(new Error("busy"), { rpcCode: -32001 })), "busy");
+  assert.equal(
+    classifySteerFailure(Object.assign(new Error("unreachable: no broker for this job's workspace (/x)."), { code: "ENOBROKER" })),
+    "unreachable"
+  );
   assert.equal(classifySteerFailure(new Error("something else")), "other");
 });
 
@@ -135,13 +139,16 @@ test("steer failure message reports the real reason instead of blaming workspace
     softLimitExceeded: false
   };
 
-  // The live-defect shape: single active job, runtime reachable, thread
-  // re-keyed by in-turn auto-compaction. Must NOT claim multi-job contention
-  // and must point at the cancel + continue recovery that actually works.
-  const compacted = renderSteerResult({ ...base, failureKind: "threadNotFound", activeJobCount: 1 });
-  assert.ok(!compacted.includes("several jobs share one workspace"), compacted);
-  assert.ok(compacted.includes("auto-compaction"), compacted);
-  assert.ok(compacted.includes(`/codex:continue ${base.threadId}`), compacted);
+  // "thread not found" means the request reached a runtime that never loaded
+  // the thread. It must NOT claim multi-job contention, must not invent an
+  // auto-compaction re-key, and must not tell the controller to cancel a
+  // healthy job.
+  const notLoaded = renderSteerResult({ ...base, failureKind: "threadNotFound", activeJobCount: 1, workspaceRoot: "/work/job-repo" });
+  assert.ok(!notLoaded.includes("several jobs share one workspace"), notLoaded);
+  assert.ok(!notLoaded.includes("auto-compaction"), notLoaded);
+  assert.ok(!notLoaded.includes(`/codex:cancel ${base.jobId}`), notLoaded);
+  assert.ok(notLoaded.includes("do not cancel"), notLoaded);
+  assert.ok(notLoaded.includes("/work/job-repo"), notLoaded);
 
   // A genuinely unreachable runtime with one active job must not recommend
   // worktrees for a contention problem that does not exist.

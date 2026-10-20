@@ -119,6 +119,13 @@ export interface CodexAppServerClientOptions {
   brokerEndpoint?: string;
   disableBroker?: boolean;
   reuseExistingBroker?: boolean;
+  /**
+   * Fail with `NO_BROKER_ERROR_CODE` instead of spawning a direct
+   * `codex app-server` when no broker endpoint is known. Live-turn control
+   * (steer, interrupt) needs the runtime that loaded the thread; a fresh
+   * process never has it and would answer "thread not found".
+   */
+  requireBroker?: boolean;
 }
 
 export interface AppServerMethodMap {
