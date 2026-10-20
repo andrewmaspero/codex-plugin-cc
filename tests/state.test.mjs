@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 
 import { makeTempDir, run } from "./helpers.mjs";
 import { fileURLToPath } from "node:url";
-import { resolveJobFile, resolveJobLogFile, resolveStateDir, resolveStateFile, saveState, upsertJob, writeJobFile } from "../plugins/codex/scripts/lib/state.mts";
+import { resolveJobFile, resolveJobFileGlobally, resolveJobLogFile, resolveStateDir, resolveStateFile, saveState, upsertJob, writeJobFile } from "../plugins/codex/scripts/lib/state.mts";
 import { waitForStoredJob } from "../plugins/codex/scripts/lib/job-control.mts";
 import {
   consumeVisibilityMarkers,
@@ -75,6 +75,62 @@ test("resolveStateDir uses CLAUDE_PLUGIN_DATA when it is provided", () => {
       process.env.CLAUDE_PLUGIN_DATA = previousPluginDataDir;
     }
   }
+});
+
+function withPluginDataDir(pluginDataDir, body) {
+  const previousPluginDataDir = process.env.CLAUDE_PLUGIN_DATA;
+  process.env.CLAUDE_PLUGIN_DATA = pluginDataDir;
+  try {
+    return body();
+  } finally {
+    if (previousPluginDataDir == null) {
+      delete process.env.CLAUDE_PLUGIN_DATA;
+    } else {
+      process.env.CLAUDE_PLUGIN_DATA = previousPluginDataDir;
+    }
+  }
+}
+
+function writeLegacyJob(dataRoot, jobId, extra = {}) {
+  const jobsDir = path.join(dataRoot, "codex-codex-fable", "state", "old-workspace-0123456789abcdef", "jobs");
+  fs.mkdirSync(jobsDir, { recursive: true });
+  fs.writeFileSync(path.join(jobsDir, `${jobId}.json`), JSON.stringify({ id: jobId, status: "completed", ...extra }));
+  return jobsDir;
+}
+
+test("resolveJobFileGlobally finds a job from before the codex-orchestrator rename in the old codex-codex-fable data dir", () => {
+  const workspace = makeTempDir();
+  const dataRoot = makeTempDir();
+  const legacyJobsDir = writeLegacyJob(dataRoot, "task-legacy");
+
+  withPluginDataDir(path.join(dataRoot, "codex-codex-orchestrator"), () => {
+    const match = resolveJobFileGlobally(workspace, "task-legacy");
+    assert.equal(match?.job.id, "task-legacy");
+    assert.equal(match?.jobFile, path.join(legacyJobsDir, "task-legacy.json"));
+  });
+});
+
+test("resolveJobFileGlobally prefers the codex-orchestrator copy of a migrated job over the old one", () => {
+  const workspace = makeTempDir();
+  const dataRoot = makeTempDir();
+  writeLegacyJob(dataRoot, "task-migrated", { status: "running" });
+
+  withPluginDataDir(path.join(dataRoot, "codex-codex-orchestrator"), () => {
+    writeJobFile(workspace, "task-migrated", { id: "task-migrated", status: "completed" });
+    const match = resolveJobFileGlobally(workspace, "task-migrated");
+    assert.equal(match?.job.status, "completed");
+    assert.equal(match?.jobFile.startsWith(path.join(dataRoot, "codex-codex-orchestrator")), true);
+  });
+});
+
+test("resolveJobFileGlobally reads no old data dir for a plugin data dir of another name", () => {
+  const workspace = makeTempDir();
+  const dataRoot = makeTempDir();
+  writeLegacyJob(dataRoot, "task-legacy");
+
+  withPluginDataDir(path.join(dataRoot, "codex-inline"), () => {
+    assert.equal(resolveJobFileGlobally(workspace, "task-legacy"), null);
+  });
 });
 
 test("saveState prunes dropped job artifacts when indexed jobs exceed the cap", () => {

@@ -1,7 +1,7 @@
-# Codex plugin for Claude Code — Fable control-plane fork
+# Codex plugin for Claude Code — codex-orchestrator fork
 
 Fork of [openai/codex-plugin-cc](https://github.com/openai/codex-plugin-cc) that adds a
-token-efficient control-plane for orchestrator models (Fable/Opus) that manage Codex as a
+token-efficient control-plane for orchestrator models that manage Codex as a
 worker fleet: live turn steering, bounded thread viewers, drift alerts, and explicit
 thread continuation. All upstream commands are unchanged.
 
@@ -47,8 +47,15 @@ Add the marketplace in Claude Code:
 Install the plugin:
 
 ```bash
-/plugin install codex@codex-fable
+/plugin install codex@codex-orchestrator
 ```
+
+The marketplace was called `codex-fable` before 1.13.0. To move an existing install, run
+`/plugin uninstall codex@codex-fable` and `/plugin marketplace remove codex-fable`, then add the
+marketplace and install as above. Claude Code keeps plugin data per marketplace, so job history
+stays in `~/.claude/plugins/data/codex-codex-fable/`; copy it to
+`~/.claude/plugins/data/codex-codex-orchestrator/` to see old jobs in `/codex:status`. Lookups of
+an old job by id also fall back to the old directory.
 
 Reload plugins:
 
@@ -296,7 +303,7 @@ Codex turn, so it spends no model credits.
 | `list_chats` | Codex chats (from `codex app-server` `thread/list` over a direct, short-lived connection, never the shared broker) and Claude Code chats (from `~/.claude/projects`), newest first, one line each: source, id, updated time, cwd, model, parent id for Codex subagents, and the title or preview. Filters: `source` (`codex`, `claude`, or `all`), `search` (titles and user prompts only), `cwd`, `includeSubagents`, `limit` (default 20, max 100), and `cursor`. |
 | `search_chats` | Case-insensitive substring search over Codex rollout files (`~/.codex/sessions`) and Claude transcripts. It reads files newest first, line by line, stops at `limit` (default 20), and returns chat id, source, time, and a snippet of about 200 characters. It matches user and assistant messages by default; add `includeTools` to also match tool calls. |
 | `read_chat` | One chat as compact items (user, assistant, or tool name with a short summary), newest last. Codex reads use `thread/items/list`, fall back to `thread/turns/list`, and fall back again to the rollout file. `turnId` (Codex only), `limit`, and `cursor` page to older items; `limit: 1` gives one item the whole budget. |
-| `list_running` | Running and queued codex-fable jobs across all workspaces, read from the plugin's job state: job id, kind, status, model, elapsed time, last activity, and log file path. Records whose worker pid is dead or missing are hidden unless you pass `includeStale`. |
+| `list_running` | Running and queued Codex plugin jobs across all workspaces, read from the plugin's job state: job id, kind, status, model, elapsed time, last activity, and log file path. Records whose worker pid is dead or missing are hidden unless you pass `includeStale`. |
 
 Every tool is read-only, and all output is bounded: `budgetChars` defaults to 4000 and is capped
 at 20000. Truncated output says so and returns a cursor where paging applies. Secrets
@@ -311,17 +318,18 @@ replies. Use `search_chats` for full-text search.
 
 ### Using the bridge from Codex agents
 
-Codex can run the same server. Add an entry to `~/.codex/config.toml` that points at a checkout of this repository, or at the installed plugin under `~/.claude/plugins/cache/codex-fable/codex/<version>/` (that path changes with every plugin update):
+Codex can run the same server. Add an entry to `~/.codex/config.toml` that points at a checkout of this repository, or at the installed plugin under `~/.claude/plugins/cache/codex-orchestrator/codex/<version>/` (that path changes with every plugin update):
 
 ```toml
 [mcp_servers.chat_bridge]
 command = "node"
 args = ["/absolute/path/to/codex-plugin-cc/plugins/codex/scripts/chat-bridge-mcp.mts"]
 # Optional: let list_running see jobs started from a Claude Code session.
-# env = { CLAUDE_PLUGIN_DATA = "/Users/you/.claude/plugins/data/codex-codex-fable" }
+# env = { CLAUDE_PLUGIN_DATA = "/Users/you/.claude/plugins/data/codex-codex-orchestrator" }
 ```
 
-Without `CLAUDE_PLUGIN_DATA`, `list_running` checks `~/.claude/plugins/data/codex-codex-fable/state`,
+Without `CLAUDE_PLUGIN_DATA`, `list_running` checks `~/.claude/plugins/data/codex-codex-orchestrator/state`,
+`~/.claude/plugins/data/codex-codex-fable/state` (the data dir from before the 1.13.0 rename),
 `~/.claude/plugins/data/codex-inline/state`, and the companion's temp-dir fallback. Set
 `CODEX_CHAT_BRIDGE_STATE_ROOTS` (a list separated by the platform path delimiter) to override those locations. The server honours
 `CODEX_HOME` and `CLAUDE_CONFIG_DIR`. `CODEX_CHAT_BRIDGE_SEARCH_MS` sets the search time

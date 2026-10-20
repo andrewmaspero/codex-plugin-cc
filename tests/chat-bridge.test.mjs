@@ -338,6 +338,17 @@ test("list_running shows live jobs across workspaces and hides stale records", (
   assert.match(empty, /No running jobs/);
 });
 
+test("default state roots read codex-orchestrator first and keep the old codex-fable data dir", () => {
+  const home = makeTempDir();
+  const { roots } = resolveBridgeContext({ HOME: home });
+  const dataDir = path.join(home, ".claude", "plugins", "data");
+  const orchestrator = roots.stateRoots.indexOf(path.join(dataDir, "codex-codex-orchestrator", "state"));
+  const legacy = roots.stateRoots.indexOf(path.join(dataDir, "codex-codex-fable", "state"));
+  assert.notEqual(orchestrator, -1, roots.stateRoots.join(", "));
+  assert.notEqual(legacy, -1, roots.stateRoots.join(", "));
+  assert.ok(orchestrator < legacy);
+});
+
 test("budgets default to 4000 chars and clamp to the 20000-char hard max", async () => {
   const { ctx, projectDir } = buildFixture();
   for (let index = 0; index < 150; index += 1) {

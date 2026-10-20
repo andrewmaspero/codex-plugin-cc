@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.13.0 (fork)
+
+Marketplace renamed to `codex-orchestrator`.
+
+- The marketplace is now `codex-orchestrator`, so the plugin installs as `codex@codex-orchestrator` (it was `codex@codex-fable`). The plugin is still named `codex`, so `/codex:*` commands and `mcp__plugin_codex_*` tool names are unchanged.
+- Claude Code derives the plugin data dir from the marketplace name, so new job state goes to `~/.claude/plugins/data/codex-codex-orchestrator/`. Job lookups by id (`status`, `result`, `steer`, `cancel` and the other job-addressed commands) fall back, read-only, to the old `codex-codex-fable` data dir. The chat bridge's `list_running` reads both.
+- The README describes moving an existing install and copying its job history.
+
 ## 1.12.1 (fork)
 
 Steer and cancel from another workspace.

@@ -7,6 +7,13 @@ import { resolveWorkspaceRoot } from "./workspace.mts";
 
 const STATE_VERSION = 1;
 const PLUGIN_DATA_ENV = "CLAUDE_PLUGIN_DATA";
+// Claude Code names the plugin data dir `<plugin>-<marketplace>`. The
+// marketplace was renamed from codex-fable to codex-orchestrator in 1.13.0, so
+// jobs started before the rename live under the old data dir. Job lookups by id
+// fall back to it, read-only; new state is written only under the current dir.
+const LEGACY_PLUGIN_DATA_DIR_NAMES: Record<string, string[]> = {
+  "codex-codex-orchestrator": ["codex-codex-fable"]
+};
 let fallbackStateRootDir: string | null = null;
 const STATE_FILE_NAME = "state.json";
 const JOBS_DIR_NAME = "jobs";
@@ -354,8 +361,17 @@ export function readJobFile(jobFile: string): JobFilePayload {
   return JSON.parse(fs.readFileSync(jobFile, "utf8")) as JobFilePayload;
 }
 
-function listStateDirs(): string[] {
-  const stateRoot = resolveStateRoot();
+function legacyStateRoots(): string[] {
+  const pluginDataDir = process.env[PLUGIN_DATA_ENV];
+  if (!pluginDataDir) {
+    return [];
+  }
+  const resolved = path.resolve(pluginDataDir);
+  const legacyNames = LEGACY_PLUGIN_DATA_DIR_NAMES[path.basename(resolved)] ?? [];
+  return legacyNames.map((name) => path.join(path.dirname(resolved), name, "state"));
+}
+
+function listStateDirs(stateRoot: string = resolveStateRoot()): string[] {
   if (!fs.existsSync(stateRoot)) {
     return [];
   }
@@ -487,10 +503,12 @@ export function resolveJobFileGlobally(cwd: string, jobId: string): GlobalJobMat
     return current;
   }
 
-  for (const stateDir of listStateDirs()) {
-    const match = findJobInStateDir(stateDir, jobId);
-    if (match) {
-      return match;
+  for (const stateRoot of [resolveStateRoot(), ...legacyStateRoots()]) {
+    for (const stateDir of listStateDirs(stateRoot)) {
+      const match = findJobInStateDir(stateDir, jobId);
+      if (match) {
+        return match;
+      }
     }
   }
 
