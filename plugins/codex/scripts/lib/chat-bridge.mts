@@ -1,6 +1,6 @@
 /**
  * Read-only chat bridge: list, search, and read Codex chats and Claude Code
- * chats, and list running codex-fable jobs. Backs scripts/chat-bridge-mcp.mts.
+ * chats, and list running Codex plugin jobs. Backs scripts/chat-bridge-mcp.mts.
  *
  * Everything here is read-only. Codex thread metadata and items come from a
  * direct, ephemeral `codex app-server` (never the persistent broker, never a
@@ -40,7 +40,9 @@ const TAIL_BYTES = 32 * 1024;
 const MULTI_ITEM_TEXT_CHARS = 400;
 const MAX_TURN_PAGES = 10;
 
-const PLUGIN_DATA_DIR_NAMES = ["codex-codex-fable", "codex-inline"];
+// codex-codex-fable is the data dir from before the marketplace was renamed to
+// codex-orchestrator (1.13.0); it is still read so older jobs stay visible.
+const PLUGIN_DATA_DIR_NAMES = ["codex-codex-orchestrator", "codex-codex-fable", "codex-inline"];
 const INTERACTIVE_SOURCE_KINDS = ["cli", "vscode", "exec", "appServer", "unknown"];
 const SUBAGENT_SOURCE_KINDS = ["subAgent", "subAgentReview", "subAgentCompact", "subAgentThreadSpawn", "subAgentOther"];
 
@@ -1650,7 +1652,7 @@ export function listRunningJobs(ctx: BridgeContext, args: ListRunningArgs = {}):
     }
   }
 
-  const header = [`Running or queued codex-fable jobs across all workspaces: ${listed}.`];
+  const header = [`Running or queued Codex plugin jobs across all workspaces: ${listed}.`];
   const footer: string[] = [];
   if (staleHidden > 0) {
     footer.push(`${staleHidden} stale record(s) (dead or missing worker pid) hidden; pass includeStale to show them.`);

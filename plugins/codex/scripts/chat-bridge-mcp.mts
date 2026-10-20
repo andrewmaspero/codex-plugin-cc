@@ -128,7 +128,7 @@ const TOOLS: ToolDefinition[] = [
     name: "list_running",
     title: "List running Codex jobs",
     description:
-      "List running or queued codex-fable background jobs across all workspaces from the plugin's job state: job id, kind, status, model, elapsed, last activity, log file path. Read-only.",
+      "List running or queued Codex plugin background jobs across all workspaces from the plugin's job state: job id, kind, status, model, elapsed, last activity, log file path. Read-only.",
     inputSchema: {
       type: "object",
       properties: {
@@ -142,7 +142,7 @@ const TOOLS: ToolDefinition[] = [
 ];
 
 const INSTRUCTIONS =
-  "Read-only bridge to Codex and Claude Code chat history. Use list_chats to find chats, search_chats for full-text search, read_chat to read one chat, and list_running for running codex-fable jobs. Outputs are bounded; follow the returned cursors for more.";
+  "Read-only bridge to Codex and Claude Code chat history. Use list_chats to find chats, search_chats for full-text search, read_chat to read one chat, and list_running for running Codex plugin jobs. Outputs are bounded; follow the returned cursors for more.";
 
 function send(message: Record<string, unknown>) {
   process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", ...message })}\n`);
