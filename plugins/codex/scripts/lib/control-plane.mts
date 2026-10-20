@@ -174,6 +174,8 @@ export function resolveSteerableJob(cwd, reference) {
             `Job ${stored.id} is ${stored.status}, so there is no active turn to steer. Use /codex:continue ${stored.threadId ?? "<thread-id>"} for a follow-up turn instead.`
           );
         }
+        // The global match carries the broker fields from the job's own
+        // state.json, which the per-job file never records.
         job = stored;
         jobWorkspaceRoot = job.workspaceRoot ?? workspaceRoot;
       }
@@ -213,12 +215,21 @@ export function resolveSteerableJob(cwd, reference) {
   return { workspaceRoot: jobWorkspaceRoot, job, threadId, turnId };
 }
 
+/**
+ * The directory whose broker runs a job's turn: the worktree for worktree
+ * jobs, otherwise the job's own workspace. Never the caller's cwd, which may
+ * belong to another workspace with no broker (or a different one).
+ */
+export function jobRuntimeCwd(job, fallbackWorkspaceRoot) {
+  return job.runCwd ?? job.workspaceRoot ?? fallbackWorkspaceRoot;
+}
+
 export async function steerJob(cwd, reference, message) {
   const text = validateSteerMessage(message);
   const { workspaceRoot, job, threadId, turnId } = resolveSteerableJob(cwd, reference);
   // Worktree jobs run (and register their broker) under their own cwd; jobs
   // on a dedicated broker record its endpoint for direct targeting.
-  const result = await steerAppServerTurn(job.runCwd ?? cwd, {
+  const result = await steerAppServerTurn(jobRuntimeCwd(job, workspaceRoot), {
     threadId,
     turnId,
     text,
@@ -237,6 +248,7 @@ export async function steerJob(cwd, reference, message) {
   return {
     jobId: job.id,
     jobStatus: job.status,
+    workspaceRoot,
     threadId,
     expectedTurnId: turnId,
     steered: result.steered,
@@ -278,8 +290,8 @@ export function renderSteerResult(payload) {
 function describeActiveSteerFailure(payload) {
   if (payload.failureKind === "threadNotFound") {
     return [
-      "The job's runtime answered but no longer indexes this thread under its original id, even though the turn is still running. The known trigger is an in-turn auto-compaction on a long turn: the Codex app-server re-keys the live thread internally, so turn/steer and turn/interrupt by the original thread id fail with 'thread not found' while the turn keeps streaming.",
-      `To redirect the job now: /codex:cancel ${payload.jobId}, then /codex:continue ${payload.threadId} -- <correction> (thread/resume reloads the thread from its rollout, which still works). Otherwise let the turn finish and follow it with /codex:status ${payload.jobId}.`
+      "The request reached a Codex app-server that has not loaded this thread, so it is not the runtime running the job. The job itself is unaffected: do not cancel it because of this error.",
+      `Check /codex:status ${payload.jobId} and /codex:tail ${payload.jobId}, then retry the steer${payload.workspaceRoot ? ` from ${payload.workspaceRoot}` : ""}. If it keeps failing, let the turn finish and follow up with /codex:continue ${payload.threadId}.`
     ];
   }
   if (payload.failureKind === "busy") {
@@ -287,7 +299,7 @@ function describeActiveSteerFailure(payload) {
   }
   if (payload.failureKind === "unreachable") {
     const lines = [
-      "No runtime answered at the endpoint recorded for this job (dead broker socket, or the turn runs on an in-process direct transport that external commands cannot reach)."
+      "No runtime answered for this job: its workspace has no live broker (dead broker socket, or the turn runs on an in-process direct transport that external commands cannot reach). Nothing was spawned in its place."
     ];
     if ((payload.activeJobCount ?? 0) > 1) {
       lines.push(
@@ -350,7 +362,12 @@ export function resolveGoalTarget(cwd, reference) {
     if (!job.threadId) {
       throw new Error(`Job ${job.id} has not reported a Codex thread yet. Wait for /codex:status ${job.id} to show one.`);
     }
-    return { threadId: job.threadId, connectCwd: job.runCwd ?? cwd, jobId: job.id, brokerEndpoint: job.brokerEndpoint ?? null };
+    return {
+      threadId: job.threadId,
+      connectCwd: jobRuntimeCwd(job, workspaceRoot),
+      jobId: job.id,
+      brokerEndpoint: job.brokerEndpoint ?? null
+    };
   }
 
   return { threadId: reference, connectCwd: cwd, jobId: null, brokerEndpoint: null };
@@ -867,7 +884,7 @@ export function listJobArtifacts(cwd, reference = "", options: ListJobArtifactsO
     throw new Error(reference ? `No job found for "${reference}".` : "No Codex jobs found for this repository.");
   }
 
-  const dir = path.join(job.runCwd ?? workspaceRoot, ARTIFACTS_DIR_NAME, job.id);
+  const dir = path.join(jobRuntimeCwd(job, workspaceRoot), ARTIFACTS_DIR_NAME, job.id);
   const files = [];
   if (fs.existsSync(dir)) {
     walkArtifactFiles(dir, dir, files, Math.max(1, Number(options.limit) || 100));
@@ -1214,7 +1231,7 @@ async function collectGoalAlerts(cwd, jobs) {
     if ((job.status !== "running" && job.status !== "queued") || !job.threadId) {
       continue;
     }
-    const response = await requestThreadGoal(job.runCwd ?? cwd, "thread/goal/get", { threadId: job.threadId }, { brokerEndpoint: job.brokerEndpoint ?? null });
+    const response = await requestThreadGoal(jobRuntimeCwd(job, resolveWorkspaceRoot(cwd)), "thread/goal/get", { threadId: job.threadId }, { brokerEndpoint: job.brokerEndpoint ?? null });
     if (!response.ok) {
       checkErrors += 1;
       continue;
@@ -1252,7 +1269,7 @@ export async function buildAlertsSnapshot(cwd, reference = "", options: BuildAle
   }
 
   const scoped = reference
-    ? globalMatch ? [readJobFile(globalMatch.jobFile)] : jobs.filter((job) => job.id === reference || job.id.startsWith(reference))
+    ? globalMatch ? [globalMatch.job] : jobs.filter((job) => job.id === reference || job.id.startsWith(reference))
     : jobs.filter((job) => job.status === "queued" || job.status === "running" || job.status === "failed" || job.status === "interrupted");
 
   if (reference && scoped.length === 0) {

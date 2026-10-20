@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.12.1 (fork)
+
+Steer and cancel from another workspace.
+
+- `steer` and `cancel` run from a directory other than the job's workspace failed with "thread not found". The cross-workspace lookup read the per-job file, which never records `brokerEndpoint`, and then connected with the caller's cwd; finding no broker there, it spawned a fresh direct `codex app-server` that had never loaded the thread. Thread ids are not re-keyed by auto-compaction, and the old message saying so is gone.
+- The cross-workspace lookup now carries `brokerEndpoint` and `brokerTransport` over from the job's own state.json, and every job-addressed control command (steer, cancel, goal, alerts, artifacts) connects from the job's run directory or workspace, never from the caller's cwd.
+- `turn/steer` and `turn/interrupt` no longer spawn a direct app-server. With no broker for the job's workspace they report `unreachable: no broker for this job's workspace` and start nothing. A failed interrupt is returned as `turnInterruptDetail` in `cancel --json`.
+- A "thread not found" steer failure now says the job is unaffected and must not be cancelled because of it.
+
 ## 1.12.0 (fork)
 
 T3 Code routing.

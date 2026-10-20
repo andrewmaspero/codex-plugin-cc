@@ -16,7 +16,7 @@ import type {
 import type { JsonValue } from "../../.generated/app-server-types/serde_json/JsonValue.js";
 
 import { readJsonFile } from "./fs.mts";
-import { BROKER_BUSY_RPC_CODE, BROKER_ENDPOINT_ENV, CodexAppServerClient } from "./app-server.mts";
+import { BROKER_BUSY_RPC_CODE, BROKER_ENDPOINT_ENV, CodexAppServerClient, NO_BROKER_ERROR_CODE } from "./app-server.mts";
 import { clearBrokerSession, createDedicatedBrokerSession, hasLiveBrokerJob, loadBrokerSession, sendBrokerShutdown, teardownBrokerSession } from "./broker-lifecycle.mts";
 import { resolveWorkspaceRoot } from "./workspace.mts";
 import { binaryAvailable, terminateProcessTree } from "./process.mts";
@@ -1534,8 +1534,11 @@ export async function interruptAppServerTurn(cwd, { threadId, turnId, brokerEndp
 
   let client = null;
   try {
+    // Only the runtime that loaded the thread can interrupt its turn; a
+    // freshly spawned direct app-server would answer "thread not found".
     client = await CodexAppServerClient.connect(cwd, {
       reuseExistingBroker: true,
+      requireBroker: true,
       ...(brokerEndpoint ? { brokerEndpoint } : {})
     });
     await client.request("turn/interrupt", { threadId, turnId });
@@ -1561,13 +1564,13 @@ export async function interruptAppServerTurn(cwd, { threadId, turnId, brokerEndp
  * Classify a failed live-turn control request (steer/interrupt) so callers can
  * report the actual reason instead of a generic guess.
  *
- * - "threadNotFound": the runtime answered but does not index the thread under
- *   this id. For a job whose turn is demonstrably still streaming, the known
- *   trigger is an in-turn auto-compaction (Codex app-server re-keys the live
- *   thread internally; turn/steer + turn/interrupt by the original thread id
- *   fail while the turn keeps running and thread/resume still works).
- * - "unreachable": no runtime answered at all (dead broker socket, direct
- *   in-process transport, connect timeout).
+ * - "threadNotFound": the runtime answered but has not loaded this thread,
+ *   i.e. the request reached a different app-server than the one running the
+ *   turn. Before 1.12.1 this happened when steer/cancel ran from another
+ *   workspace: the caller's cwd found no broker and a fresh direct app-server
+ *   was spawned. Thread ids are not re-keyed by auto-compaction.
+ * - "unreachable": no runtime answered at all (no broker recorded for the
+ *   job's workspace, dead broker socket, connect timeout).
  * - "busy": the shared broker rejected the request while streaming.
  */
 export function classifySteerFailure(error): "busy" | "threadNotFound" | "unreachable" | "other" {
@@ -1579,6 +1582,7 @@ export function classifySteerFailure(error): "busy" | "threadNotFound" | "unreac
     return "threadNotFound";
   }
   if (
+    error?.code === NO_BROKER_ERROR_CODE ||
     error?.code === "ENOENT" ||
     error?.code === "ECONNREFUSED" ||
     error?.code === "ECONNRESET" ||
@@ -1616,8 +1620,11 @@ export async function steerAppServerTurn(cwd, { threadId, turnId, text, brokerEn
 
   let client = null;
   try {
+    // Only the runtime that loaded the thread can steer its turn; a freshly
+    // spawned direct app-server would answer "thread not found".
     client = await CodexAppServerClient.connect(cwd, {
       reuseExistingBroker: true,
+      requireBroker: true,
       ...(brokerEndpoint ? { brokerEndpoint } : {})
     });
     // The broker lets turn/steer through during an active stream, but a

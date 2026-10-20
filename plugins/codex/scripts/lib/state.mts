@@ -365,6 +365,46 @@ function listStateDirs(): string[] {
     .map((entry) => path.join(stateRoot, entry.name));
 }
 
+function readStateJobEntry(stateDir: string, jobId: string): JobRecord | null {
+  const stateFile = path.join(stateDir, STATE_FILE_NAME);
+  if (!fs.existsSync(stateFile)) {
+    return null;
+  }
+  try {
+    const jobs = (JSON.parse(fs.readFileSync(stateFile, "utf8")) as Partial<PluginState>).jobs ?? [];
+    return jobs.find((entry) => entry.id === jobId) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The per-job file is written by the worker and never receives the broker
+ * fields: `upsertJob` records `brokerEndpoint`/`brokerTransport` (and the
+ * run/workspace paths) only in that workspace's state.json. A control command
+ * that finds the job through another workspace must carry those fields over,
+ * or it connects to the caller's runtime instead of the job's. The state.json
+ * values win for the broker fields because a later `closed` record must
+ * override an endpoint a stale job file may still hold.
+ */
+function mergeStateJobFields(job: JobRecord, stateJob: JobRecord | null): JobRecord {
+  if (!stateJob) {
+    return job;
+  }
+  const merged: JobRecord = { ...job };
+  for (const key of ["brokerEndpoint", "brokerTransport"] as const) {
+    if (Object.prototype.hasOwnProperty.call(stateJob, key)) {
+      merged[key] = stateJob[key] ?? null;
+    }
+  }
+  for (const key of ["workspaceRoot", "runCwd"] as const) {
+    if (merged[key] == null && stateJob[key] != null) {
+      merged[key] = stateJob[key];
+    }
+  }
+  return merged;
+}
+
 function findJobInStateDir(stateDir: string, jobId: string): GlobalJobMatch | null {
   const jobFile = path.join(stateDir, JOBS_DIR_NAME, `${jobId}.json`);
   if (!fs.existsSync(jobFile)) {
@@ -372,7 +412,10 @@ function findJobInStateDir(stateDir: string, jobId: string): GlobalJobMatch | nu
   }
   try {
     const job = readJobFile(jobFile);
-    return typeof job.id === "string" ? { stateDir, jobFile, job: job as JobRecord } : null;
+    if (typeof job.id !== "string") {
+      return null;
+    }
+    return { stateDir, jobFile, job: mergeStateJobFields(job as JobRecord, readStateJobEntry(stateDir, jobId)) };
   } catch {
     return null;
   }
