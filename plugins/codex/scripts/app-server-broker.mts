@@ -57,11 +57,11 @@ function writePidFile(pidFile) {
 async function main() {
   const [subcommand, ...argv] = process.argv.slice(2);
   if (subcommand !== "serve") {
-    throw new Error("Usage: node scripts/app-server-broker.mts serve --endpoint <value> [--cwd <path>] [--pid-file <path>]");
+    throw new Error("Usage: node scripts/app-server-broker.mts serve --endpoint <value> [--cwd <path>] [--pid-file <path>] [--codex-bin <path>]");
   }
 
   const { options } = parseArgs(argv, {
-    valueOptions: ["cwd", "pid-file", "endpoint"]
+    valueOptions: ["cwd", "pid-file", "endpoint", "codex-bin"]
   });
 
   if (!options.endpoint) {
@@ -74,7 +74,8 @@ async function main() {
   const pidFile = options["pid-file"] ? path.resolve(String(options["pid-file"])) : null;
   writePidFile(pidFile);
 
-  const appClient = await CodexAppServerClient.connect(cwd, { disableBroker: true });
+  const codexBinary = options["codex-bin"] ? String(options["codex-bin"]) : undefined;
+  const appClient = await CodexAppServerClient.connect(cwd, { disableBroker: true, codexBinary });
   let activeRequestSocket = null;
   let activeStreamSocket = null;
   let activeStreamThreadIds = null;

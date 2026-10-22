@@ -1,6 +1,6 @@
 ---
 description: Delegate investigation, an explicit fix request, or follow-up rescue work to the Codex rescue subagent
-argument-hint: "[--background|--wait] [--resume|--fresh] [--write|--full|--sandbox <mode>] [--worktree|--worktree-name <name>] [--goal <objective>|--goal-file <path>] [--model <luna|sol|astra>] [--effort <none|low|medium|high>] [what Codex should investigate, solve, or continue]"
+argument-hint: "[--background|--wait] [--resume|--fresh] [--write|--full|--sandbox <mode>] [--worktree|--worktree-name <name>] [--computer-use] [--goal <objective>|--goal-file <path>] [--model <luna|sol|astra>] [--effort <none|low|medium|high>] [what Codex should investigate, solve, or continue]"
 allowed-tools: Bash(node:*), AskUserQuestion, Agent
 ---
 
@@ -21,6 +21,7 @@ Execution mode:
 - `--goal <objective>`, `--goal-file <path>`, and `--goal-budget <tokens>` set a persistent thread goal for long-running loops (see `/codex:goal`). Preserve them for the forwarded `task` call.
 - A bare ` -- ` in the request switches everything after it to verbatim passthrough; avoid a standalone `--` inside ordinary task prose.
 - `--write`, `--full`, `--sandbox <mode>`, `--worktree`, and `--worktree-name <name>` are sandbox/isolation flags. Preserve them for the forwarded `task` call, but do not treat them as part of the natural-language task text. When none are present, the workspace's configured default sandbox applies (set once with `/codex:setup --sandbox full` for trusted full-permission runs).
+- `--computer-use` makes the job require the signed ChatGPT-bundled Codex that computer use needs. Preserve it for the forwarded `task` call; add it yourself when the task needs Codex computer use (screenshots, native apps, the user's own browser).
 - If the request includes `--resume`, do not ask whether to continue. The user already chose.
 - If the request includes `--fresh`, do not ask whether to continue. The user already chose.
 - Otherwise, before starting Codex, check for a resumable rescue thread from this Claude session by running:

@@ -254,6 +254,17 @@ If Codex is missing and npm is available, it can offer to install Codex for you.
 
 You can also use `/codex:setup` to manage the optional review gate.
 
+#### Which `codex` binary runs
+
+On macOS the plugin prefers the Codex bundled in the ChatGPT desktop app (`/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex`, or the same path under `~/Applications`) and falls back to the first `codex` on `PATH`. The broker, direct app-servers, and availability checks all use the same choice. Codex computer use only works from the OpenAI-signed bundled binary: its helper checks the caller's code signature, so an npm, pnpm, or vite-plus install fails with `Sky Computer Use native pipe startup failed`. The bundled build follows the ChatGPT app's release train, so it can be an alpha that differs from the npm release; `/codex:setup` shows both versions.
+
+- `CODEX_COMPANION_CODEX_BIN=/abs/path/to/codex` uses exactly that binary; `=path` forces the `PATH` codex (no computer use); `=bundled` requires the bundled one.
+- `CODEX_COMPANION_BUNDLED_CODEX=/abs/path` says where the bundled launcher is.
+- `task --computer-use` (also on `continue`) refuses to start unless the bundled binary is selected, instead of failing mid-turn.
+- A shared broker started from a different binary (including any broker from before 1.14.0) is replaced when no other live job uses it; otherwise the job runs on its own dedicated broker and the shared one is left alone.
+
+`/codex:setup` reports the binary in use, the `PATH` codex it is not using, and a static computer use check: the bundled `CodexCLI.app` passes `codesign --verify` and shares a team id with `~/.codex/computer-use/Codex Computer Use.app`. That check does not start a session, so macOS privacy grants are not proven.
+
 #### Enabling review gate
 
 ```bash
@@ -403,7 +414,7 @@ No. This plugin delegates through your local [Codex CLI](https://developers.open
 
 That means:
 
-- it uses the same Codex install you would use directly
+- it uses the ChatGPT app's bundled Codex when present, otherwise the `codex` on your `PATH` (see [Which `codex` binary runs](#which-codex-binary-runs))
 - it uses the same local authentication state
 - it uses the same repository checkout and machine-local environment
 

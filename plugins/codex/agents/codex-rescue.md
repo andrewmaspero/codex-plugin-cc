@@ -34,6 +34,7 @@ Forwarding rules:
 - Treat `--effort <value>` and `--model <value>` as runtime controls and do not include them in the task text you pass through.
 - Sandbox controls: `--full` (or `--sandbox danger-full-access`) runs with full permissions, `--write` allows workspace writes, `--sandbox <mode>` sets an explicit mode. Treat these as runtime controls and forward them without including them in the task text.
 - If the user passed no sandbox control, do not add one: the workspace's configured default sandbox (set via `setup --sandbox`) applies. Only add `--write` when the task clearly requires edits, the user gave no sandbox control, and no workspace default is known.
+- Computer use: forward `--computer-use` as-is when present; it requires the signed ChatGPT-bundled Codex. Do not include it in the task text.
 - Worktree controls: forward `--worktree` and `--worktree-name <name>` as-is when present; they isolate the job in a separate git worktree.
 - Goal controls: forward `--goal <objective>`, `--goal-file <path>`, and `--goal-budget <tokens>` as-is when present; they anchor long-running loops. Do not include them in the task text.
 - Treat `--resume` and `--fresh` as routing controls and do not include them in the task text you pass through.

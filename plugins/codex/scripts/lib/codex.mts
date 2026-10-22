@@ -17,9 +17,11 @@ import type { JsonValue } from "../../.generated/app-server-types/serde_json/Jso
 
 import { readJsonFile } from "./fs.mts";
 import { BROKER_BUSY_RPC_CODE, BROKER_ENDPOINT_ENV, CodexAppServerClient, NO_BROKER_ERROR_CODE } from "./app-server.mts";
-import { clearBrokerSession, createDedicatedBrokerSession, hasLiveBrokerJob, loadBrokerSession, sendBrokerShutdown, teardownBrokerSession } from "./broker-lifecycle.mts";
+import { BROKER_BINARY_MISMATCH_CODE, clearBrokerSession, createDedicatedBrokerSession, hasLiveBrokerJob, loadBrokerSession, sendBrokerShutdown, teardownBrokerSession } from "./broker-lifecycle.mts";
 import { resolveWorkspaceRoot } from "./workspace.mts";
 import { binaryAvailable, terminateProcessTree } from "./process.mts";
+import { resolveCodexBinary } from "./codex-binary.mts";
+import type { CodexBinary } from "./codex-binary.mts";
 
 type ProgressUpdate =
   | string
@@ -79,6 +81,7 @@ interface CaptureTurnOptions {
 interface WithSteerableAppServerOptions {
   onEndpoint?: ((endpoint: string | null, transport: AppServerTransport) => void) | null;
   onRetry?: ((error: Error) => void) | null;
+  codexBinary?: string | null;
 }
 
 interface AuthStatusFields {
@@ -122,6 +125,8 @@ interface RunAppServerTurnOptions {
   outputSchema?: JsonValue;
   onProgress?: ProgressReporter | null;
   onRuntimeEndpoint?: ((endpoint: string | null, transport: AppServerTransport) => void) | null;
+  /** Codex executable chosen at launch (see codex-binary.mts); defaults to the resolver's choice. */
+  codexBinary?: CodexBinary | null;
 }
 
 interface StructuredOutputFallback {
@@ -1087,6 +1092,7 @@ export async function withAppServer(cwd, fn) {
     const brokerRequested = client?.transport === "broker" || Boolean(process.env[BROKER_ENDPOINT_ENV]);
     const shouldRetryDirect =
       (client?.transport === "broker" && error?.rpcCode === BROKER_BUSY_RPC_CODE) ||
+      error?.code === BROKER_BINARY_MISMATCH_CODE ||
       (brokerRequested && (error?.code === "ENOENT" || error?.code === "ECONNREFUSED"));
 
     if (client) {
@@ -1120,9 +1126,10 @@ async function withSteerableAppServer<T>(
   options: WithSteerableAppServerOptions = {}
 ): Promise<T> {
   const onEndpoint = options.onEndpoint ?? null;
+  const codexBinary = options.codexBinary ?? undefined;
   let client = null;
   try {
-    client = await CodexAppServerClient.connect(cwd);
+    client = await CodexAppServerClient.connect(cwd, { codexBinary });
     if (client.transport === "broker") {
       // Record the endpoint the client ACTUALLY connected through, not a
       // re-derivation from env/session-file: those can diverge (e.g. when
@@ -1139,6 +1146,7 @@ async function withSteerableAppServer<T>(
     const brokerRequested = client?.transport === "broker" || Boolean(process.env[BROKER_ENDPOINT_ENV]);
     const shouldRetry =
       (client?.transport === "broker" && error?.rpcCode === BROKER_BUSY_RPC_CODE) ||
+      error?.code === BROKER_BINARY_MISMATCH_CODE ||
       (brokerRequested && (error?.code === "ENOENT" || error?.code === "ECONNREFUSED"));
 
     if (client) {
@@ -1152,10 +1160,10 @@ async function withSteerableAppServer<T>(
 
     options.onRetry?.(error instanceof Error ? error : new Error(String(error)));
 
-    const session = await createDedicatedBrokerSession(cwd, { killProcess: terminateProcessTree });
+    const session = await createDedicatedBrokerSession(cwd, { killProcess: terminateProcessTree, codexBinary });
     if (!session) {
       onEndpoint?.(null, "direct");
-      const directClient = await CodexAppServerClient.connect(cwd, { disableBroker: true });
+      const directClient = await CodexAppServerClient.connect(cwd, { disableBroker: true, codexBinary });
       try {
         return await fn(directClient);
       } finally {
@@ -1427,34 +1435,45 @@ async function getCodexAuthStatusFromClient(client, cwd) {
   }
 }
 
-export function getCodexAvailability(cwd) {
-  const installHint = "Install with `npm i -g @openai/codex` or `pnpm add -g @openai/codex`.";
+export function getCodexAvailability(cwd, options: { computerUse?: boolean; binary?: CodexBinary } = {}) {
+  const installHint = "Install the ChatGPT desktop app (bundled, signed Codex) or run `npm i -g @openai/codex` / `pnpm add -g @openai/codex`.";
+  let binary: CodexBinary;
+  try {
+    binary = options.binary ?? resolveCodexBinary({ computerUse: options.computerUse });
+  } catch (error) {
+    return { available: false, detail: error instanceof Error ? error.message : String(error), resolvedPath: null, binary: null };
+  }
+  const label = `${binary.command} (${binary.source})`;
   const describeFailure = (status) =>
     status.resolvedPath
       ? `codex resolved to ${status.resolvedPath} but failed to run: ${status.detail}`
       : `codex was ${status.detail}`;
-  const versionStatus = binaryAvailable("codex", ["--version"], { cwd });
+  const versionStatus = binaryAvailable(binary.command, ["--version"], { cwd });
   if (!versionStatus.available) {
     return {
       available: false,
       detail: `${describeFailure(versionStatus)}. ${installHint}`,
-      resolvedPath: versionStatus.resolvedPath
+      resolvedPath: versionStatus.resolvedPath,
+      binary
     };
   }
 
-  const appServerStatus = binaryAvailable("codex", ["app-server", "--help"], { cwd });
+  const appServerStatus = binaryAvailable(binary.command, ["app-server", "--help"], { cwd });
   if (!appServerStatus.available) {
     return {
       available: false,
       detail: `${versionStatus.detail}; advanced runtime unavailable: ${describeFailure(appServerStatus)}. ${installHint}`,
-      resolvedPath: appServerStatus.resolvedPath
+      resolvedPath: appServerStatus.resolvedPath,
+      binary
     };
   }
 
   return {
     available: true,
-    detail: `${versionStatus.detail}; advanced runtime available`,
-    resolvedPath: versionStatus.resolvedPath
+    detail: `${versionStatus.detail} at ${label}; advanced runtime available`,
+    version: versionStatus.detail,
+    resolvedPath: versionStatus.resolvedPath,
+    binary
   };
 }
 
@@ -1810,9 +1829,9 @@ export async function teardownWorkspaceBrokerSession(cwd, workspaceRoot = resolv
 }
 
 export async function runAppServerTurn(cwd, options: RunAppServerTurnOptions = {}) {
-  const availability = getCodexAvailability(cwd);
+  const availability = getCodexAvailability(cwd, { binary: options.codexBinary ?? undefined });
   if (!availability.available) {
-    throw new Error("Codex CLI is not installed or is missing required runtime support. Install it with `npm install -g @openai/codex`, then rerun `/codex:setup`.");
+    throw new Error(`Codex CLI is not installed or is missing required runtime support. ${availability.detail} Then rerun \`/codex:setup\`.`);
   }
 
   // A broker can become busy between thread/start and turn/start. Preserve the
@@ -1909,6 +1928,7 @@ export async function runAppServerTurn(cwd, options: RunAppServerTurnOptions = {
       commandExecutions: turnState.commandExecutions
     };
   }, {
+    codexBinary: options.codexBinary?.command ?? null,
     onEndpoint: options.onRuntimeEndpoint,
     onRetry: (error) => {
       emitProgress(options.onProgress, `Retrying Codex runtime with a dedicated broker: ${shorten(error.message, 220)}`, "starting");
