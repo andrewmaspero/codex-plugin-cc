@@ -24,6 +24,7 @@ Execution rules:
 - `astra` only when the user explicitly asks for Astra (Sol 6.1 is stronger), at effort `low` or `medium` only. With no `--effort`, the runtime sends `medium` for astra. `sol` is the default workhorse for coding and reviews. `luna` is near-free and fast, strong for bulk, vision, research, and strictly specified coding; it supports effort `none`.
 - Sandbox: forward `--write`, `--full`, `--sandbox <mode>`, `--worktree`, and `--worktree-name <name>` when present; strip them from the task text. If the user passed no sandbox control, add NOTHING — the workspace's configured default sandbox (set with `/codex:setup --sandbox`) applies, and adding `--write` would silently downgrade a workspace configured for full access. Only add `--write` when the task clearly requires edits AND the workspace has no configured default (setup report shows `default sandbox: read-only`).
 - Forward `--goal <objective>` and `--goal-budget <tokens>` when present; strip them from the task text.
+- Forward `--computer-use` when present; strip it from the task text. It makes the job fail fast unless the signed ChatGPT-bundled Codex is selected.
 
 Command selection:
 - Use exactly one `task` invocation per rescue handoff.

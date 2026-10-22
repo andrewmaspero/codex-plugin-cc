@@ -10,12 +10,14 @@ import { createBrokerEndpoint, parseBrokerEndpoint } from "./broker-endpoint.mts
 import { buildChildEnv } from "./env.mts";
 import { listJobs, resolveStateDir } from "./state.mts";
 import { isProcessAlive } from "./process.mts";
+import { resolveWorkspaceRoot } from "./workspace.mts";
 import type { TerminateProcessTreeOptions } from "./process.mts";
 
 export const PID_FILE_ENV = "CODEX_COMPANION_APP_SERVER_PID_FILE";
 export const LOG_FILE_ENV = "CODEX_COMPANION_APP_SERVER_LOG_FILE";
 const BROKER_STATE_FILE = "broker.json";
 const DEFAULT_BROKER_READY_TIMEOUT_MS = 10000;
+export const BROKER_BINARY_MISMATCH_CODE = "EBROKERBINARY";
 
 export interface BrokerSession {
   endpoint: string;
@@ -23,6 +25,8 @@ export interface BrokerSession {
   logFile: string;
   sessionDir: string;
   pid: number | null;
+  /** The codex executable the broker's app-server was spawned from; absent for brokers started before 1.14.0. */
+  codexBinary?: string | null;
 }
 
 type BrokerEndpointFactory = (sessionDir: string, platform?: NodeJS.Platform) => string;
@@ -34,6 +38,8 @@ interface BrokerLifecycleOptions {
   scriptPath?: string;
   createBrokerEndpoint?: BrokerEndpointFactory;
   killProcess?: (pid: number, options?: TerminateProcessTreeOptions) => unknown;
+  /** Codex executable the broker must run; a shared broker on another binary is replaced or bypassed. */
+  codexBinary?: string | null;
 }
 
 interface SpawnBrokerProcessOptions {
@@ -43,6 +49,7 @@ interface SpawnBrokerProcessOptions {
   pidFile: string;
   logFile: string;
   env?: NodeJS.ProcessEnv;
+  codexBinary?: string | null;
 }
 
 interface TeardownBrokerSessionOptions extends Partial<BrokerSession> {
@@ -110,10 +117,15 @@ export function spawnBrokerProcess({
   endpoint,
   pidFile,
   logFile,
-  env = process.env
+  env = process.env,
+  codexBinary = null
 }: SpawnBrokerProcessOptions): ChildProcess {
   const logFd = fs.openSync(logFile, "a");
-  const child = spawn(process.execPath, [scriptPath, "serve", "--endpoint", endpoint, "--cwd", cwd, "--pid-file", pidFile], {
+  const args = [scriptPath, "serve", "--endpoint", endpoint, "--cwd", cwd, "--pid-file", pidFile];
+  if (codexBinary) {
+    args.push("--codex-bin", codexBinary);
+  }
+  const child = spawn(process.execPath, args, {
     cwd,
     env: buildChildEnv(env),
     detached: true,
@@ -155,8 +167,9 @@ export function clearBrokerSession(cwd: string): void {
 }
 
 /** A terminal-looking record may still belong to a worker in mid-turn compaction. */
-export function hasLiveBrokerJob(workspaceRoot: string, cwd: string, endpoint: string | null): boolean {
+export function hasLiveBrokerJob(workspaceRoot: string, cwd: string, endpoint: string | null, options: { excludePid?: number } = {}): boolean {
   return listJobs(workspaceRoot).some((job) =>
+    job.pid !== options.excludePid &&
     isProcessAlive(job.pid) === true && (
       (endpoint != null && job.brokerEndpoint === endpoint) ||
       job.runCwd === cwd ||
@@ -178,8 +191,21 @@ async function isBrokerEndpointReady(endpoint: string | null | undefined): Promi
 
 export async function ensureBrokerSession(cwd: string, options: BrokerLifecycleOptions = {}): Promise<BrokerSession | null> {
   const existing = loadBrokerSession(cwd);
+  const codexBinary = options.codexBinary ?? null;
   if (existing && (await isBrokerEndpointReady(existing.endpoint))) {
-    return existing;
+    if (!codexBinary || existing.codexBinary === codexBinary) {
+      return existing;
+    }
+    // The shared broker runs another codex binary (or predates binary
+    // tracking). Replace it only when no other live job streams through it;
+    // otherwise the caller isolates this job on a dedicated broker.
+    if (hasLiveBrokerJob(resolveWorkspaceRoot(cwd), cwd, existing.endpoint, { excludePid: process.pid })) {
+      throw Object.assign(
+        new Error(`The shared Codex broker runs ${existing.codexBinary ?? "an untracked codex binary"}, but this job needs ${codexBinary}, and other live jobs use the broker.`),
+        { code: BROKER_BINARY_MISMATCH_CODE }
+      );
+    }
+    await sendBrokerShutdown(existing.endpoint).catch(() => {});
   }
 
   if (existing) {
@@ -209,7 +235,8 @@ export async function ensureBrokerSession(cwd: string, options: BrokerLifecycleO
     endpoint,
     pidFile,
     logFile,
-    env: options.env ?? process.env
+    env: options.env ?? process.env,
+    codexBinary
   });
 
   const ready = await waitForBrokerEndpoint(endpoint, options.timeoutMs ?? DEFAULT_BROKER_READY_TIMEOUT_MS);
@@ -230,7 +257,8 @@ export async function ensureBrokerSession(cwd: string, options: BrokerLifecycleO
     pidFile,
     logFile,
     sessionDir,
-    pid: child.pid ?? null
+    pid: child.pid ?? null,
+    codexBinary
   };
   saveBrokerSession(cwd, session);
   return session;
@@ -242,6 +270,7 @@ export async function ensureBrokerSession(cwd: string, options: BrokerLifecycleO
  * broker is busy streaming another job. The caller owns teardown.
  */
 export async function createDedicatedBrokerSession(cwd: string, options: BrokerLifecycleOptions = {}): Promise<BrokerSession | null> {
+  const codexBinary = options.codexBinary ?? null;
   const sessionDir = createBrokerSessionDir("cxc-job-");
   const endpointFactory = options.createBrokerEndpoint ?? createBrokerEndpoint;
   const endpoint = endpointFactory(sessionDir, options.platform);
@@ -255,7 +284,8 @@ export async function createDedicatedBrokerSession(cwd: string, options: BrokerL
     endpoint,
     pidFile,
     logFile,
-    env: options.env ?? process.env
+    env: options.env ?? process.env,
+    codexBinary
   });
 
   const ready = await waitForBrokerEndpoint(endpoint, options.timeoutMs ?? DEFAULT_BROKER_READY_TIMEOUT_MS);
@@ -276,7 +306,8 @@ export async function createDedicatedBrokerSession(cwd: string, options: BrokerL
     pidFile,
     logFile,
     sessionDir,
-    pid: child.pid ?? null
+    pid: child.pid ?? null,
+    codexBinary
   };
 }
 

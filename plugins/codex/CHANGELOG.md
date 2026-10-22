@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.14.0 (fork)
+
+Signed Codex for computer use.
+
+- Every runtime spawned bare `codex` (`lib/app-server.mts`, `lib/codex.mts` availability checks), so jobs ran whatever was first on `PATH`. Computer use from those jobs failed with `Native apps: Error: Sky Computer Use native pipe startup failed`, because the computer use helper accepts only the OpenAI-signed Codex bundled in the ChatGPT desktop app.
+- New `lib/codex-binary.mts` picks one binary for the broker, direct app-servers, and probes: `CODEX_COMPANION_CODEX_BIN` (absolute path, `path`, or `bundled`), else the ChatGPT-bundled codex when present, else `PATH` codex. The bundled launcher location can be set with `CODEX_COMPANION_BUNDLED_CODEX`.
+- `task --computer-use` and `continue --computer-use` require the bundled binary and fail before launch when it is missing.
+- Brokers record the binary they run (`codexBinary` in `broker.json`, `serve --codex-bin`). A shared broker on another binary is replaced when idle; when another live job uses it, the job gets a dedicated broker and the shared one is untouched.
+- `/codex:setup` shows the binary in use, the unused `PATH` codex and its version, and a static computer use check (bundled app signature and helper team id).
+
 ## 1.13.0 (fork)
 
 Marketplace renamed to `codex-orchestrator`.

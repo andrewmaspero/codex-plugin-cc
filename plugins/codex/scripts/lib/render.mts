@@ -206,6 +206,8 @@ export function renderSetupReport(report) {
     `- node: ${report.node.detail}`,
     `- npm: ${report.npm.detail}`,
     `- codex: ${report.codex.detail}`,
+    ...(report.pathCodex ? [`- PATH codex (not used): ${report.pathCodex.available ? `${report.pathCodex.detail} at ${report.pathCodex.resolvedPath}` : report.pathCodex.detail}`] : []),
+    ...(report.computerUse ? [`- computer use: ${report.computerUse.detail}`] : []),
     `- auth: ${report.auth.detail}`,
     `- session runtime: ${report.sessionRuntime.label}`,
     `- review gate: ${report.reviewGateEnabled ? "enabled" : "disabled"}`,

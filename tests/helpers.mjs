@@ -62,6 +62,11 @@ afterAll(() => {
 // in-process state-path computations and spawned companions agree.
 delete process.env.CLAUDE_PLUGIN_DATA;
 delete process.env.CODEX_COMPANION_SESSION_ID;
+// The companion prefers the ChatGPT-bundled codex over PATH. Point the bundled
+// lookup at nothing so the fake codex fixtures on PATH are what tests run,
+// whatever is installed on the machine (or inherited from a Codex job's env).
+process.env.CODEX_COMPANION_BUNDLED_CODEX = "";
+delete process.env.CODEX_COMPANION_CODEX_BIN;
 
 export function testBaseEnv() {
   // Tests must not change behaviour when the suite itself runs inside T3 Code.

@@ -39,6 +39,8 @@ import {
   resolveWorktreeRoot
 } from "./lib/git.mts";
 import { binaryAvailable, isProcessAlive, terminateProcessTree } from "./lib/process.mts";
+import { getComputerUseStatus, resolveCodexBinary } from "./lib/codex-binary.mts";
+import type { CodexBinary } from "./lib/codex-binary.mts";
 import { loadPromptTemplate, interpolateTemplate } from "./lib/prompts.mts";
 import {
   generateJobId,
@@ -203,7 +205,7 @@ function printUsage() {
       "  node scripts/codex-companion.mts setup [--enable-review-gate|--disable-review-gate] [--sandbox <read-only|write|full|clear>] [--statusline] [--json]",
       "  node scripts/codex-companion.mts review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>]",
       "  node scripts/codex-companion.mts adversarial-review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [focus text]",
-      "  node scripts/codex-companion.mts task [--background] [--no-auto-continue] [--write|--full|--sandbox <mode>] [--worktree|--worktree-name <name>] [--goal <objective>] [--goal-budget <tokens>] [--resume-last|--resume|--fresh] [--model <luna|sol|astra>] [--effort <none|low|medium|high>] [prompt]",
+      "  node scripts/codex-companion.mts task [--background] [--no-auto-continue] [--computer-use] [--write|--full|--sandbox <mode>] [--worktree|--worktree-name <name>] [--goal <objective>] [--goal-budget <tokens>] [--resume-last|--resume|--fresh] [--model <luna|sol|astra>] [--effort <none|low|medium|high>] [prompt]",
       "  node scripts/codex-companion.mts transfer [--source <claude-jsonl>] [--json]",
       "  node scripts/codex-companion.mts status [job-id] [--all] [--wait] [--timeout-ms <ms, 0 = until done>] [--poll-interval-ms <ms>] [--json]",
       "  node scripts/codex-companion.mts wait <job-id> [--timeout <seconds>]",
@@ -218,7 +220,7 @@ function printUsage() {
       "  node scripts/codex-companion.mts alerts [job-id] [--stall-seconds <n>] [--no-goals] [--json]",
       "  node scripts/codex-companion.mts goal <set|show|clear> [job-id|thread-id] [--budget <tokens>] [--status <status>] [-- <objective>]",
       "  node scripts/codex-companion.mts artifacts [job-id] [--limit <n>] [--json]",
-      "  node scripts/codex-companion.mts continue <thread-id> [--background] [--write|--full|--sandbox <mode>] [--worktree|--worktree-name <name>] [--goal <objective>] [--goal-budget <tokens>] [--model <luna|sol|astra>] [--effort <none|low|medium|high>] [prompt]",
+      "  node scripts/codex-companion.mts continue <thread-id> [--background] [--computer-use] [--write|--full|--sandbox <mode>] [--worktree|--worktree-name <name>] [--goal <objective>] [--goal-budget <tokens>] [--model <luna|sol|astra>] [--effort <none|low|medium|high>] [prompt]",
       "  node scripts/codex-companion.mts worktrees [--prune] [--json]"
     ].join("\n")
   );
@@ -460,6 +462,12 @@ async function buildSetupReport(cwd, actionsTaken = [], options: { statusline?: 
   const nodeStatus = getNodeRuntimeStatus();
   const npmStatus = binaryAvailable("npm", ["--version"], { cwd });
   const codexStatus = getCodexAvailability(cwd);
+  const computerUse = codexStatus.binary
+    ? getComputerUseStatus(codexStatus.binary)
+    : { available: false, detail: "unknown: no usable codex binary" };
+  // Show the PATH codex when it is not the one in use, so version skew between
+  // the ChatGPT-bundled build and an npm install is visible.
+  const pathCodex = codexStatus.binary?.source !== "path" ? binaryAvailable("codex", ["--version"], { cwd }) : null;
   const authStatus = await getCodexAuthStatus(cwd);
   const config = getConfig(workspaceRoot);
 
@@ -483,6 +491,11 @@ async function buildSetupReport(cwd, actionsTaken = [], options: { statusline?: 
     node: nodeStatus,
     npm: npmStatus,
     codex: codexStatus,
+    codexBinary: codexStatus.binary ?? null,
+    computerUse,
+    pathCodex: pathCodex
+      ? { available: pathCodex.available, detail: pathCodex.detail, resolvedPath: pathCodex.resolvedPath }
+      : null,
     auth: authStatus,
     sessionRuntime: getSessionRuntimeStatus(process.env, workspaceRoot),
     reviewGateEnabled: Boolean(config.stopReviewGate),
@@ -542,8 +555,8 @@ function buildAdversarialReviewPrompt(context, focusText) {
   });
 }
 
-function ensureCodexAvailable(cwd) {
-  const availability = getCodexAvailability(cwd);
+function ensureCodexAvailable(cwd, binary: CodexBinary | null = null) {
+  const availability = getCodexAvailability(cwd, { binary: binary ?? undefined });
   if (!availability.available) {
     throw new Error(`Codex CLI is not installed or is missing required runtime support. ${availability.detail} Then rerun \`/codex:setup\`.`);
   }
@@ -945,7 +958,7 @@ async function executeReviewRun(request) {
 
 async function executeTaskRun(request) {
   const workspaceRoot = resolveWorkspaceRoot(request.cwd);
-  ensureCodexAvailable(request.cwd);
+  ensureCodexAvailable(request.cwd, request.codexBinary ?? null);
 
   // Record which runtime the turn actually streams through, so steer/goal/
   // cancel can reach it even when this job fell back to a dedicated broker.
@@ -990,6 +1003,7 @@ async function executeTaskRun(request) {
       sandbox: request.sandbox ?? (request.write ? "workspace-write" : "read-only"),
       goal: followUp ? null : request.goal ?? null,
       onRuntimeEndpoint,
+      codexBinary: request.codexBinary ?? null,
       onProgress: request.onProgress,
       persistThread: true,
       threadName: resumeThreadId ? null : buildPersistentTaskThreadName(request.prompt || DEFAULT_CONTINUE_PROMPT)
@@ -1155,9 +1169,10 @@ function setupJobWorktree(cwd, job, options) {
   };
 }
 
-function buildTaskRequest({ cwd, workspaceRoot = null, model, effort, prompt, write, sandbox = null, worktree = null, goal = null, resumeLast, resumeThreadId = null, autoContinue = false, jobId }) {
+function buildTaskRequest({ cwd, workspaceRoot = null, model, effort, prompt, write, sandbox = null, worktree = null, goal = null, resumeLast, resumeThreadId = null, autoContinue = false, codexBinary = null, jobId }) {
   return {
     cwd,
+    codexBinary,
     workspaceRoot,
     model,
     effort,
@@ -1427,7 +1442,7 @@ async function handleReview(argv) {
 async function handleTask(argv) {
   const { options, positionals } = parseCommandInput(argv, {
     valueOptions: ["model", "effort", "cwd", "prompt-file", "sandbox", "worktree-name", "goal", "goal-file", "goal-budget"],
-    booleanOptions: ["json", "write", "full", "worktree", "resume-last", "resume", "fresh", "background", "prompt-stdin", "no-auto-continue"],
+    booleanOptions: ["json", "write", "full", "worktree", "resume-last", "resume", "fresh", "background", "prompt-stdin", "no-auto-continue", "computer-use"],
     aliasMap: {
       m: "model"
     }
@@ -1440,6 +1455,7 @@ async function handleTask(argv) {
     : resolveFreshTaskModel(options.model);
   const effort = resolveModelEffort(model, normalizeReasoningEffort(options.effort));
   const prompt = readTaskPrompt(cwd, options, positionals);
+  const codexBinary = resolveCodexBinary({ computerUse: Boolean(options["computer-use"]) });
 
   const resumeLast = Boolean(options["resume-last"] || options.resume);
   const fresh = Boolean(options.fresh);
@@ -1470,11 +1486,12 @@ async function handleTask(argv) {
     goal: resolveGoalOption(cwd, options),
     resumeLast,
     autoContinue: !options["no-auto-continue"] && !resumeLast,
+    codexBinary,
     jobId: job.id
   });
 
   if (options.background) {
-    ensureCodexAvailable(cwd);
+    ensureCodexAvailable(cwd, codexBinary);
     const { payload } = enqueueBackgroundTask(cwd, job, request);
     outputCommandResult(payload, renderQueuedTaskLaunch(payload), options.json);
     return;
@@ -2007,7 +2024,7 @@ function handleArtifacts(argv) {
 async function handleContinue(argv) {
   const { options, positionals } = parseCommandInput(argv, {
     valueOptions: ["model", "effort", "cwd", "sandbox", "worktree-name", "goal", "goal-file", "goal-budget"],
-    booleanOptions: ["json", "write", "full", "worktree", "background", "prompt-stdin"],
+    booleanOptions: ["json", "write", "full", "worktree", "background", "prompt-stdin", "computer-use"],
     aliasMap: {
       m: "model"
     }
@@ -2026,6 +2043,7 @@ async function handleContinue(argv) {
   // backticks, quotes, or `$` never passes through shell interpretation; in that
   // mode positionals hold only the thread id.
   const prompt = options["prompt-stdin"] ? readStdinIfPiped().trim() : promptParts.join(" ").trim();
+  const codexBinary = resolveCodexBinary({ computerUse: Boolean(options["computer-use"]) });
   const sandbox = resolveTaskSandbox(options, workspaceRoot);
   const write = sandbox !== "read-only";
 
@@ -2046,11 +2064,12 @@ async function handleContinue(argv) {
     goal: resolveGoalOption(cwd, options),
     resumeLast: false,
     resumeThreadId: threadId,
+    codexBinary,
     jobId: job.id
   });
 
   if (options.background) {
-    ensureCodexAvailable(cwd);
+    ensureCodexAvailable(cwd, codexBinary);
     const { payload } = enqueueBackgroundTask(cwd, job, request);
     outputCommandResult(payload, renderQueuedTaskLaunch(payload), options.json);
     return;

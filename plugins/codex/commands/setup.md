@@ -44,3 +44,4 @@ Output rules:
 - Present the final setup output to the user.
 - If installation was skipped, present the original setup output.
 - If Codex is installed but not authenticated, preserve the guidance to run `!codex login`.
+- Keep the `codex`, `PATH codex`, and `computer use` lines: they say which Codex binary jobs run and whether Codex computer use can work (it needs the signed Codex bundled with the ChatGPT app).

@@ -20,6 +20,7 @@ import { parseBrokerEndpoint } from "./broker-endpoint.mts";
 import { ensureBrokerSession, loadBrokerSession } from "./broker-lifecycle.mts";
 import { buildChildEnv } from "./env.mts";
 import { terminateProcessTree } from "./process.mts";
+import { resolveCodexBinary } from "./codex-binary.mts";
 
 type ProtocolError = Error & { data?: unknown; rpcCode?: number };
 type PendingRequest = {
@@ -30,6 +31,8 @@ type PendingRequest = {
 
 type AppServerClientInternalOptions = CodexAppServerClientOptions & {
   disableTurnCompleteHook?: boolean;
+  /** Codex executable to spawn (direct) or require of the shared broker; defaults to resolveCodexBinary(). */
+  codexBinary?: string;
 };
 
 const PLUGIN_MANIFEST_URL = new URL("../../.claude-plugin/plugin.json", import.meta.url);
@@ -247,7 +250,8 @@ class SpawnedCodexAppServerClient extends AppServerClientBase {
 
   async initialize() {
     const args = ["app-server", ...(this.turnCompleteHookEnabled ? buildTurnCompleteNotifyArgs() : [])];
-    this.proc = spawn("codex", args, {
+    const command = this.options.codexBinary ?? resolveCodexBinary({ env: buildChildEnv(this.options.env) }).command;
+    this.proc = spawn(command, args, {
       cwd: this.cwd,
       env: buildChildEnv(this.options.env),
       stdio: ["pipe", "pipe", "pipe"],
@@ -423,7 +427,8 @@ export class CodexAppServerClient {
         brokerEndpoint = loadBrokerSession(cwd)?.endpoint ?? null;
       }
       if (!brokerEndpoint && !options.reuseExistingBroker) {
-        const brokerSession = await ensureBrokerSession(cwd, { env: options.env });
+        const codexBinary = options.codexBinary ?? resolveCodexBinary({ env: buildChildEnv(options.env) }).command;
+        const brokerSession = await ensureBrokerSession(cwd, { env: options.env, codexBinary });
         brokerEndpoint = brokerSession?.endpoint ?? null;
       }
     }
